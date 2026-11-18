@@ -309,3 +309,97 @@ def test_legacy_flask_log_socket_allows_logged_in_users(legacy_flask_api):
     app = legacy_flask_api()
 
     assert _connect_log_socket(app) is True
+
+
+# ---------------------------------------------------------------------------
+# FileSystemConversationStore: path traversal and conversation takeover
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def conversation_store(tmp_path):
+    from vanna.integrations.local import FileSystemConversationStore
+
+    return FileSystemConversationStore(base_dir=str(tmp_path / "conversations"))
+
+
+def _user(user_id):
+    from vanna.core.user import User
+
+    return User(id=user_id, email=f"{user_id}@example.com", group_memberships=[])
+
+
+@pytest.mark.parametrize(
+    "conversation_id",
+    [
+        "..",
+        ".",
+        "",
+        "../escaped",
+        "a/../../escaped",
+        "..\\escaped",
+        "{absolute}",
+        "C:escaped",
+        "a\0b",
+    ],
+)
+async def test_conversation_store_rejects_path_traversal(
+    conversation_store, tmp_path, conversation_id
+):
+    from vanna.core.storage import Conversation, Message
+
+    conversation_id = conversation_id.replace(
+        "{absolute}", (tmp_path / "escaped").as_posix()
+    )
+
+    conversation = Conversation(
+        id=conversation_id,
+        user=_user("alice"),
+        messages=[Message(role="user", content="hi")],
+    )
+
+    with pytest.raises(ValueError):
+        await conversation_store.update_conversation(conversation)
+    with pytest.raises(ValueError):
+        await conversation_store.get_conversation(conversation_id, _user("alice"))
+
+    assert not (tmp_path / "escaped").exists()
+    assert not (tmp_path / "metadata.json").exists()
+
+
+async def test_conversation_store_accepts_normal_ids(conversation_store):
+    import uuid
+
+    from vanna.core.storage import Conversation, Message
+
+    for conversation_id in (str(uuid.uuid4()), "conv_123", "my.conversation"):
+        conversation = Conversation(
+            id=conversation_id,
+            user=_user("alice"),
+            messages=[Message(role="user", content="hi")],
+        )
+        await conversation_store.update_conversation(conversation)
+        loaded = await conversation_store.get_conversation(
+            conversation_id, _user("alice")
+        )
+        assert loaded is not None
+        assert [m.content for m in loaded.messages] == ["hi"]
+
+
+async def test_conversation_store_prevents_takeover(conversation_store):
+    from vanna.core.storage import Conversation, Message
+
+    await conversation_store.create_conversation("shared", _user("alice"), "secret")
+
+    # Bob reuses Alice's conversation ID; the agent treats it as a new
+    # conversation because get_conversation() returns None for Bob.
+    assert await conversation_store.get_conversation("shared", _user("bob")) is None
+    hijack = Conversation(
+        id="shared", user=_user("bob"), messages=[Message(role="user", content="x")]
+    )
+    with pytest.raises(PermissionError):
+        await conversation_store.update_conversation(hijack)
+
+    assert await conversation_store.get_conversation("shared", _user("bob")) is None
+    alice_view = await conversation_store.get_conversation("shared", _user("alice"))
+    assert [m.content for m in alice_view.messages] == ["secret"]

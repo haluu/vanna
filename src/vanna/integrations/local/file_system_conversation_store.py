@@ -36,8 +36,25 @@ class FileSystemConversationStore(ConversationStore):
         self.base_dir.mkdir(parents=True, exist_ok=True)
 
     def _get_conversation_dir(self, conversation_id: str) -> Path:
-        """Get the directory path for a conversation."""
-        return self.base_dir / conversation_id
+        """Get the directory path for a conversation.
+
+        Conversation IDs can come from HTTP requests, so they must be a single
+        path component that stays inside the base directory.
+
+        Raises:
+            ValueError: If the conversation ID is not a safe directory name.
+        """
+        conv_dir = self.base_dir / conversation_id
+        if (
+            not conversation_id
+            or conversation_id in (".", "..")
+            or any(char in conversation_id for char in ("/", "\\", "\0"))
+            or os.path.splitdrive(conversation_id)[0]
+            or Path(os.path.abspath(conv_dir)).parent
+            != Path(os.path.abspath(self.base_dir))
+        ):
+            raise ValueError(f"Invalid conversation ID: {conversation_id!r}")
+        return conv_dir
 
     def _get_metadata_path(self, conversation_id: str) -> Path:
         """Get the metadata file path for a conversation."""
@@ -48,7 +65,24 @@ class FileSystemConversationStore(ConversationStore):
         return self._get_conversation_dir(conversation_id) / "messages"
 
     def _save_metadata(self, conversation: Conversation) -> None:
-        """Save conversation metadata to disk."""
+        """Save conversation metadata to disk.
+
+        Raises:
+            PermissionError: If the conversation exists and belongs to another
+                user.
+        """
+        metadata_path = self._get_metadata_path(conversation.id)
+        if metadata_path.exists():
+            try:
+                with open(metadata_path, "r") as f:
+                    owner_id = json.load(f)["user"]["id"]
+            except (json.JSONDecodeError, KeyError, TypeError):
+                owner_id = None
+            if owner_id is not None and owner_id != conversation.user.id:
+                raise PermissionError(
+                    f"Conversation {conversation.id!r} belongs to another user"
+                )
+
         conv_dir = self._get_conversation_dir(conversation.id)
         conv_dir.mkdir(parents=True, exist_ok=True)
 
@@ -59,7 +93,6 @@ class FileSystemConversationStore(ConversationStore):
             "updated_at": conversation.updated_at.isoformat(),
         }
 
-        metadata_path = self._get_metadata_path(conversation.id)
         with open(metadata_path, "w") as f:
             json.dump(metadata, f, indent=2)
 
