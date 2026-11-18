@@ -17,7 +17,11 @@ The code is now validated before it runs:
 * imports are limited to Plotly, pandas and NumPy, which are exposed through
   read-only proxies that hide private names, I/O helpers and submodules;
 * the code runs with a minimal set of builtins (no ``open``, ``eval``,
-  ``exec``, ``getattr``, ``__import__`` ...).
+  ``exec``, ``getattr``, ``__import__`` ...);
+* methods that call another method by name (``apply``, ``agg``, ...) may only
+  be called directly with literal arguments, never stored in a variable or
+  passed around, and Plotly trendline options are checked when the chart
+  function runs.
 
 This is defence in depth, not an operating-system sandbox. Applications that
 let untrusted users trigger chart generation should still run with least
@@ -26,6 +30,8 @@ privilege.
 
 import ast
 import builtins
+import functools
+import inspect
 import string
 import types
 from typing import Any, Dict, Optional
@@ -53,6 +59,11 @@ _BLOCKED_NAMES = frozenset(
         "dump",
         "ctypes",
         "mro",
+        # Open a browser or write HTML files (``fig.show(renderer=...)``).
+        "show",
+        # Import a plotting backend module named by the ``backend`` argument.
+        "hist",
+        "boxplot",
     }
 )
 
@@ -118,7 +129,27 @@ _ALLOWED_TO_NAMES = frozenset(
 # Methods that call a method of the object when given its name as a string,
 # e.g. ``df.apply("to_csv", path_or_buf=...)``.
 _DISPATCH_METHODS = frozenset({"apply", "agg", "aggregate", "transform"})
-_DISPATCH_KEYWORDS = frozenset({"trendline_options"})
+_DISPATCH_KEYWORDS = frozenset({"trendline_options", "aggfunc"})
+
+# Methods of rolling/expanding/ewm windows that Plotly trendlines may call by
+# name through ``trendline_options={"function": ...}``.
+_TRENDLINE_FUNCTIONS = frozenset(
+    {
+        "mean",
+        "median",
+        "sum",
+        "min",
+        "max",
+        "std",
+        "var",
+        "sem",
+        "count",
+        "skew",
+        "kurt",
+        "quantile",
+        "rank",
+    }
+)
 
 # Attributes that chart code may assign to, e.g. ``df.columns = [...]``.
 _ASSIGNABLE_ATTRIBUTES = frozenset({"columns", "index", "name", "names"})
@@ -213,14 +244,61 @@ def _is_blocked_name(name: str) -> bool:
     return name.startswith(_BLOCKED_PREFIXES)
 
 
+def _check_trendline_options(options: Any) -> None:
+    """Plotly calls ``getattr(window, options["function"])``; allow known names only."""
+    if options is None:
+        return
+    if not isinstance(options, dict):
+        raise UnsafePlotlyCodeError("trendline_options must be a dict")
+    function = options.get("function", "mean")
+    if not isinstance(function, str) or function not in _TRENDLINE_FUNCTIONS:
+        raise UnsafePlotlyCodeError(
+            f"trendline function {function!r} is not allowed in generated Plotly code"
+        )
+    function_args = options.get("function_args", {})
+    if not isinstance(function_args, dict) or any(
+        callable(v) for v in function_args.values()
+    ):
+        raise UnsafePlotlyCodeError("trendline function_args must be plain values")
+
+
+@functools.lru_cache(maxsize=None)
+def _guard_trendline(func: Any) -> Any:
+    """Wrap Plotly Express functions so trendline options are checked at runtime.
+
+    The AST check only sees ``trendline_options=`` keywords; this also covers
+    options passed positionally or built at runtime.
+    """
+    try:
+        signature = inspect.signature(func)
+    except (TypeError, ValueError):
+        return func
+    if "trendline_options" not in signature.parameters:
+        return func
+
+    @functools.wraps(func)
+    def guarded(*args: Any, **kwargs: Any) -> Any:
+        bound = signature.bind_partial(*args, **kwargs)
+        _check_trendline_options(bound.arguments.get("trendline_options"))
+        return func(*args, **kwargs)
+
+    return guarded
+
+
 class _ModuleProxy:
     """Read-only view of a module without private names, I/O helpers or submodules."""
 
-    __slots__ = ("_module", "_submodule_prefixes")
+    __slots__ = ("_module", "_submodule_prefixes", "_guard_calls")
 
-    def __init__(self, module: types.ModuleType, submodule_prefixes: tuple = ()):
+    def __init__(
+        self,
+        module: types.ModuleType,
+        submodule_prefixes: tuple = (),
+        guard_calls: bool = False,
+    ):
         object.__setattr__(self, "_module", module)
         object.__setattr__(self, "_submodule_prefixes", submodule_prefixes)
+        object.__setattr__(self, "_guard_calls", guard_calls)
 
     def __getattr__(self, name: str) -> Any:
         if _is_blocked_name(name) or name in _HIDDEN_MODULE_NAMES:
@@ -232,6 +310,8 @@ class _ModuleProxy:
             ):
                 return _ModuleProxy(value, self._submodule_prefixes)
             raise AttributeError(f"'{name}' is not available in generated Plotly code")
+        if self._guard_calls and isinstance(value, types.FunctionType):
+            return _guard_trendline(value)
         return value
 
     def __setattr__(self, name: str, value: Any) -> None:
@@ -245,7 +325,9 @@ class _ModuleProxy:
 
 
 _PX = _ModuleProxy(
-    px, ("plotly.express.colors", "plotly.colors", "_plotly_utils.colors")
+    px,
+    ("plotly.express.colors", "plotly.colors", "_plotly_utils.colors"),
+    guard_calls=True,
 )
 _GO = _ModuleProxy(go, ("plotly.graph_objs",))
 _SUBPLOTS = _ModuleProxy(plotly.subplots)
@@ -364,7 +446,11 @@ def _check_dispatch_argument(node: ast.AST) -> None:
     if isinstance(node, ast.Lambda):
         return
     if isinstance(node, ast.Constant):
-        if isinstance(node.value, str) and _is_blocked_name(node.value):
+        # pandas falls back to ``getattr(numpy, name)`` for unknown names, so
+        # the NumPy I/O helpers are blocked too.
+        if isinstance(node.value, str) and (
+            _is_blocked_name(node.value) or node.value in _HIDDEN_MODULE_NAMES
+        ):
             _reject(f"'{node.value}' is not allowed as a function name")
         return
     if isinstance(node, ast.UnaryOp) and isinstance(node.operand, ast.Constant):
@@ -396,6 +482,17 @@ def _check_dispatch_argument(node: ast.AST) -> None:
 
 
 def _check_call(node: ast.Call) -> None:
+    for keyword in node.keywords:
+        # ``f(**options)`` would hide the keyword names from the checks below.
+        if keyword.arg is None and not (
+            isinstance(keyword.value, ast.Dict)
+            and all(
+                isinstance(key, ast.Constant) and isinstance(key.value, str)
+                for key in keyword.value.keys
+            )
+        ):
+            _reject("'**' is only allowed with dict literals that have string keys")
+
     if isinstance(node.func, ast.Attribute) and node.func.attr in _DISPATCH_METHODS:
         for argument in node.args:
             _check_dispatch_argument(argument)
@@ -405,6 +502,10 @@ def _check_call(node: ast.Call) -> None:
     for keyword in node.keywords:
         if keyword.arg in _DISPATCH_KEYWORDS:
             _check_dispatch_argument(keyword.value)
+        elif keyword.arg is None:
+            for key, value in zip(keyword.value.keys, keyword.value.values):
+                if key.value in _DISPATCH_KEYWORDS:
+                    _check_dispatch_argument(value)
 
 
 def validate_plotly_code(code: str) -> ast.Module:
@@ -419,6 +520,10 @@ def validate_plotly_code(code: str) -> ast.Module:
     except SyntaxError as e:
         raise UnsafePlotlyCodeError(f"Invalid Python syntax: {e}") from e
 
+    # apply/agg/transform may only be called directly, so their arguments are
+    # always checked: ``f = df.agg; f("to_csv", ...)`` would skip the check.
+    call_targets = {id(n.func) for n in ast.walk(tree) if isinstance(n, ast.Call)}
+
     for node in ast.walk(tree):
         if not isinstance(node, _ALLOWED_NODES):
             _reject(f"{type(node).__name__} is not allowed")
@@ -431,6 +536,8 @@ def validate_plotly_code(code: str) -> ast.Module:
             _check_binding(node.arg)
         elif isinstance(node, ast.Attribute):
             _check_attribute(node)
+            if node.attr in _DISPATCH_METHODS and id(node) not in call_targets:
+                _reject(f"'{node.attr}' may only be called directly")
         elif isinstance(node, ast.Constant):
             if isinstance(node.value, str) and node.value.startswith("__"):
                 _reject("String literals starting with '__' are not allowed")

@@ -40,7 +40,19 @@ class FAISSAgentMemory(AgentMemory):
         persist_path: Optional[str] = None,
         dimension: int = 384,
         metric: str = "cosine",
+        migrate_pickle_metadata: bool = False,
     ):
+        """
+        Args:
+            index_path: Directory for the index and its metadata.
+            persist_path: Alias for ``index_path``.
+            dimension: Embedding dimension.
+            metric: "cosine" or "l2".
+            migrate_pickle_metadata: Metadata used to be stored with pickle
+                (``metadata.pkl``), which runs code when loaded. It is now
+                stored as ``metadata.json``. Set this to True once to convert
+                an existing ``metadata.pkl`` that you trust.
+        """
         if not FAISS_AVAILABLE:
             raise ImportError(
                 "FAISS is required for FAISSAgentMemory. Install with: pip install faiss-cpu"
@@ -52,19 +64,40 @@ class FAISSAgentMemory(AgentMemory):
         self.metric = metric
         self._index = None
         self._metadata = {}
+        self._migrate_pickle_metadata = migrate_pickle_metadata
         self._executor = ThreadPoolExecutor(max_workers=2)
         self._load_index()
 
     def _load_index(self):
         """Load or create FAISS index."""
         index_file = os.path.join(self.index_path, "index.faiss")
-        metadata_file = os.path.join(self.index_path, "metadata.pkl")
+        metadata_file = os.path.join(self.index_path, "metadata.json")
+        pickle_file = os.path.join(self.index_path, "metadata.pkl")
 
-        if os.path.exists(index_file) and os.path.exists(metadata_file):
+        if (
+            os.path.exists(index_file)
+            and not os.path.exists(metadata_file)
+            and os.path.exists(pickle_file)
+        ):
+            if not self._migrate_pickle_metadata:
+                raise RuntimeError(
+                    f"{pickle_file} uses the old pickle format, which can run "
+                    "arbitrary code when loaded. If you trust this file, create "
+                    "FAISSAgentMemory with migrate_pickle_metadata=True once to "
+                    "convert it to metadata.json."
+                )
+            # Explicitly trusted by the caller; converted to JSON right away.
+            self._index = faiss.read_index(index_file)
+            with open(pickle_file, "rb") as f:
+                self._metadata = pickle.load(f)  # noqa: S301
+            self._save_index()
+        elif os.path.exists(index_file) and os.path.exists(metadata_file):
             # Load existing index
             self._index = faiss.read_index(index_file)
-            with open(metadata_file, "rb") as f:
-                self._metadata = pickle.load(f)
+            with open(metadata_file, "r", encoding="utf-8") as f:
+                self._metadata = {
+                    int(idx): entry for idx, entry in json.load(f).items()
+                }
         else:
             # Create new index
             os.makedirs(self.index_path, exist_ok=True)
@@ -77,11 +110,15 @@ class FAISSAgentMemory(AgentMemory):
     def _save_index(self):
         """Save FAISS index to disk."""
         index_file = os.path.join(self.index_path, "index.faiss")
-        metadata_file = os.path.join(self.index_path, "metadata.pkl")
+        metadata_file = os.path.join(self.index_path, "metadata.json")
 
         faiss.write_index(self._index, index_file)
-        with open(metadata_file, "wb") as f:
-            pickle.dump(self._metadata, f)
+        with open(metadata_file, "w", encoding="utf-8") as f:
+            json.dump(
+                {str(idx): entry for idx, entry in self._metadata.items()},
+                f,
+                default=str,
+            )
 
     def _create_embedding(self, text: str) -> np.ndarray:
         """Create a simple embedding from text (placeholder)."""

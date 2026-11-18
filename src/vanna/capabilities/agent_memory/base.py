@@ -21,7 +21,14 @@ if TYPE_CHECKING:
 
 
 class AgentMemory(ABC):
-    """Abstract base class for agent memory operations."""
+    """Abstract base class for agent memory operations.
+
+    A memory is shared by every user of the agent: what one user saves is
+    returned to all users, and text memories are added to their system
+    prompts. Register the save tools for trusted users only (for example
+    ``access_groups=["admin"]``), or wrap the memory in
+    ``UserScopedAgentMemory`` to give each user a separate memory.
+    """
 
     @abstractmethod
     async def save_tool_usage(

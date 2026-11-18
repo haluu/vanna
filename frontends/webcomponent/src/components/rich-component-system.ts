@@ -6,6 +6,7 @@
  */
 
 import { richComponentStyleText } from '../styles/rich-component-styles.js';
+import { escapeHtml, renderBasicMarkdown } from '../utils/html.js';
 
 // Component interfaces matching Python backend
 export interface RichComponent {
@@ -114,28 +115,28 @@ export class CardComponentRenderer extends BaseComponentRenderer {
     card.className = 'rich-component rich-card';
     card.dataset.componentId = component.id;
 
-    const { title, content, subtitle, icon, status, actions = [], collapsible, collapsed } = component.data;
+    const { title, content, subtitle, icon, status, actions = [], collapsible, collapsed, markdown } = component.data;
 
     console.log('🎴 Extracted actions:', actions, 'Length:', actions?.length);
 
     card.innerHTML = `
       <div class="card-header ${collapsible ? 'collapsible' : ''}">
-        ${icon ? `<span class="card-icon">${icon}</span>` : ''}
+        ${icon ? `<span class="card-icon">${escapeHtml(icon)}</span>` : ''}
         <div class="card-title-section">
-          <h3 class="card-title">${title}</h3>
-          ${subtitle ? `<p class="card-subtitle">${subtitle}</p>` : ''}
+          <h3 class="card-title">${escapeHtml(title)}</h3>
+          ${subtitle ? `<p class="card-subtitle">${escapeHtml(subtitle)}</p>` : ''}
         </div>
-        ${status ? `<span class="card-status status-${status}">${status}</span>` : ''}
+        ${status ? `<span class="card-status status-${escapeHtml(status)}">${escapeHtml(status)}</span>` : ''}
         ${collapsible ? `<button class="card-toggle">${collapsed ? '▶' : '▼'}</button>` : ''}
       </div>
       <div class="card-content ${collapsed ? 'collapsed' : ''}">
-        ${content}
+        ${markdown ? renderBasicMarkdown(content) : escapeHtml(content)}
       </div>
       ${actions && actions.length > 0 ? `
         <div class="card-actions">
           ${actions.map((action: any) => `
-            <button class="card-action ${action.variant || 'secondary'}" data-action="${action.action}">
-              ${action.label}
+            <button class="card-action ${escapeHtml(action.variant || 'secondary')}" data-action="${escapeHtml(action.action)}">
+              ${escapeHtml(action.label)}
             </button>
           `).join('')}
         </div>
@@ -228,7 +229,11 @@ export class CardComponentRenderer extends BaseComponentRenderer {
 
     if (updates.content) {
       const contentEl = element.querySelector('.card-content');
-      if (contentEl) contentEl.innerHTML = updates.content;
+      if (contentEl) {
+        contentEl.innerHTML = component.data.markdown
+          ? renderBasicMarkdown(updates.content)
+          : escapeHtml(updates.content);
+      }
     }
 
     if (updates.status) {
@@ -260,7 +265,7 @@ export class TaskListComponentRenderer extends BaseComponentRenderer {
 
     container.innerHTML = `
       <div class="task-list-header">
-        <h3 class="task-list-title">${title}</h3>
+        <h3 class="task-list-title">${escapeHtml(title)}</h3>
         ${show_progress ? `
           <div class="task-list-progress">
             <span class="progress-text">${completedTasks}/${tasks.length} completed</span>
@@ -284,18 +289,18 @@ export class TaskListComponentRenderer extends BaseComponentRenderer {
     const progressBar = task.progress !== null && task.progress !== undefined ? `
       <div class="task-progress">
         <div class="task-progress-bar">
-          <div class="task-progress-fill" style="width: ${task.progress * 100}%"></div>
+          <div class="task-progress-fill" style="width: ${Number(task.progress) * 100}%"></div>
         </div>
         <span class="task-progress-text">${Math.round(task.progress * 100)}%</span>
       </div>
     ` : '';
 
     return `
-      <div class="task-item status-${task.status}" data-task-id="${task.id}">
+      <div class="task-item status-${escapeHtml(task.status)}" data-task-id="${escapeHtml(task.id)}">
         <div class="task-icon">${statusIcon}</div>
         <div class="task-content">
-          <div class="task-title">${task.title}</div>
-          ${task.description ? `<div class="task-description">${task.description}</div>` : ''}
+          <div class="task-title">${escapeHtml(task.title)}</div>
+          ${task.description ? `<div class="task-description">${escapeHtml(task.description)}</div>` : ''}
           ${progressBar}
           ${showTimestamps && task.created_at ? `
             <div class="task-timestamp">
@@ -329,11 +334,11 @@ export class ProgressBarComponentRenderer extends BaseComponentRenderer {
 
     container.innerHTML = `
       <div class="progress-header">
-        ${label ? `<span class="progress-label">${label}</span>` : ''}
+        ${label ? `<span class="progress-label">${escapeHtml(label)}</span>` : ''}
         ${show_percentage ? `<span class="progress-percentage">${percentage}%</span>` : ''}
       </div>
       <div class="progress-track">
-        <div class="progress-fill ${animated ? 'animated' : ''} ${status ? `status-${status}` : ''}"
+        <div class="progress-fill ${animated ? 'animated' : ''} ${status ? `status-${escapeHtml(status)}` : ''}"
              style="width: ${percentage}%"></div>
       </div>
     `;
@@ -388,17 +393,17 @@ export class NotificationComponentRenderer extends BaseComponentRenderer {
     ` : '';
 
     container.innerHTML = `
-      <div class="notification-content level-${level}">
-        ${levelIcon ? `<span class="notification-icon">${levelIcon}</span>` : ''}
+      <div class="notification-content level-${escapeHtml(level)}">
+        ${levelIcon ? `<span class="notification-icon">${escapeHtml(levelIcon)}</span>` : ''}
         <div class="notification-body">
-          ${title ? `<div class="notification-title">${title}</div>` : ''}
-          <div class="notification-message">${message}</div>
+          ${title ? `<div class="notification-title">${escapeHtml(title)}</div>` : ''}
+          <div class="notification-message">${escapeHtml(message)}</div>
         </div>
         ${actions.length > 0 ? `
           <div class="notification-actions">
             ${actions.map((action: any) => `
-              <button class="notification-action ${action.variant || 'secondary'}" data-action="${action.action}">
-                ${action.label}
+              <button class="notification-action ${escapeHtml(action.variant || 'secondary')}" data-action="${escapeHtml(action.action)}">
+                ${escapeHtml(action.label)}
               </button>
             `).join('')}
           </div>
@@ -444,9 +449,9 @@ export class StatusIndicatorComponentRenderer extends BaseComponentRenderer {
     const pulseClass = pulse ? 'pulse' : '';
 
     container.innerHTML = `
-      <div class="status-indicator-content status-${status} ${pulseClass}">
-        <span class="status-icon">${statusIcon}</span>
-        <span class="status-message">${message}</span>
+      <div class="status-indicator-content status-${escapeHtml(status)} ${pulseClass}">
+        <span class="status-icon">${escapeHtml(statusIcon)}</span>
+        <span class="status-message">${escapeHtml(message)}</span>
       </div>
     `;
 
@@ -525,11 +530,11 @@ export class DataFrameComponentRenderer extends BaseComponentRenderer {
     if (title || description) {
       headerHTML = `
         <div class="dataframe-header">
-          ${title ? `<h3 class="dataframe-title">${title}</h3>` : ''}
-          ${description ? `<p class="dataframe-description">${description}</p>` : ''}
+          ${title ? `<h3 class="dataframe-title">${escapeHtml(title)}</h3>` : ''}
+          ${description ? `<p class="dataframe-description">${escapeHtml(description)}</p>` : ''}
           <div class="dataframe-meta">
-            <span class="row-count">${row_count} rows</span>
-            <span class="column-count">${column_count} columns</span>
+            <span class="row-count">${escapeHtml(row_count)} rows</span>
+            <span class="column-count">${escapeHtml(column_count)} columns</span>
           </div>
         </div>
       `;
@@ -566,8 +571,8 @@ export class DataFrameComponentRenderer extends BaseComponentRenderer {
             <thead>
               <tr>
                 ${columns.map((col: string) => `
-                  <th class="${sortable ? 'sortable' : ''}" data-column="${col}">
-                    ${col}
+                  <th class="${sortable ? 'sortable' : ''}" data-column="${escapeHtml(col)}">
+                    ${escapeHtml(col)}
                     ${sortable ? '<span class="sort-indicator"></span>' : ''}
                   </th>
                 `).join('')}
@@ -580,7 +585,7 @@ export class DataFrameComponentRenderer extends BaseComponentRenderer {
                     const value = row[col];
                     const columnType = column_types[col] || 'string';
                     const formattedValue = this.formatCellValue(value, columnType);
-                    return `<td class="cell-${columnType}">${formattedValue}</td>`;
+                    return `<td class="cell-${escapeHtml(columnType)}">${formattedValue}</td>`;
                   }).join('')}
                 </tr>
               `).join('')}
@@ -588,7 +593,7 @@ export class DataFrameComponentRenderer extends BaseComponentRenderer {
           </table>
           ${hasMoreRows ? `
             <div class="dataframe-truncated">
-              <em>Showing ${max_rows_displayed} of ${row_count} rows</em>
+              <em>Showing ${escapeHtml(max_rows_displayed)} of ${escapeHtml(row_count)} rows</em>
             </div>
           ` : ''}
         </div>
@@ -621,24 +626,18 @@ export class DataFrameComponentRenderer extends BaseComponentRenderer {
 
     switch (columnType) {
       case 'number':
-        return typeof value === 'number' ? value.toLocaleString() : String(value);
+        return escapeHtml(typeof value === 'number' ? value.toLocaleString() : value);
       case 'date':
         try {
-          return new Date(value).toLocaleDateString();
+          return escapeHtml(new Date(value).toLocaleDateString());
         } catch {
-          return String(value);
+          return escapeHtml(value);
         }
       case 'boolean':
         return value ? '✓' : '✗';
       default:
-        return this.escapeHtml(String(value));
+        return escapeHtml(value);
     }
-  }
-
-  private escapeHtml(text: string): string {
-    const div = document.createElement('div');
-    div.textContent = text;
-    return div.innerHTML;
   }
 
   private attachEventListeners(container: HTMLElement, data: any[], columns: string[]): void {
@@ -695,7 +694,7 @@ export class DataFrameComponentRenderer extends BaseComponentRenderer {
 
   private sortTable(container: HTMLElement, data: any[], columns: string[], column: string): void {
     const tbody = container.querySelector('tbody');
-    const header = container.querySelector(`th[data-column="${column}"]`) as HTMLElement;
+    const header = container.querySelector(`th[data-column="${CSS.escape(column)}"]`) as HTMLElement;
     if (!tbody || !header) return;
 
     // Determine sort direction
@@ -799,41 +798,22 @@ export class TextComponentRenderer extends BaseComponentRenderer {
     if (code_language) {
       // Code block
       container.innerHTML = `
-        <pre class="text-code" style="${textStyle}"><code class="language-${code_language}">${this.escapeHtml(content)}</code></pre>
+        <pre class="text-code" style="${escapeHtml(textStyle)}"><code class="language-${escapeHtml(code_language)}">${escapeHtml(content)}</code></pre>
       `;
     } else if (markdown) {
       // Markdown text (simple implementation)
       container.innerHTML = `
-        <div class="text-markdown" style="${textStyle}">${this.renderMarkdown(content)}</div>
+        <div class="text-markdown" style="${escapeHtml(textStyle)}">${renderBasicMarkdown(content)}</div>
       `;
     } else {
       // Plain text
       container.innerHTML = `
-        <div class="text-content" style="${textStyle}">${this.escapeHtml(content)}</div>
+        <div class="text-content" style="${escapeHtml(textStyle)}">${escapeHtml(content)}</div>
       `;
     }
 
 
     return container;
-  }
-
-  private escapeHtml(text: string): string {
-    const div = document.createElement('div');
-    div.textContent = text;
-    return div.innerHTML;
-  }
-
-  private renderMarkdown(text: string): string {
-    // Simple markdown rendering - just basic formatting
-    return text
-      .replace(/^## (.*$)/gm, '<h2>$1</h2>')
-      .replace(/^# (.*$)/gm, '<h1>$1</h1>')
-      .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
-      .replace(/\*(.*?)\*/g, '<em>$1</em>')
-      .replace(/^- (.*$)/gm, '<li>$1</li>')
-      .replace(/(<li>.*<\/li>)/s, '<ul>$1</ul>')
-      .replace(/\n\n/g, '</p><p>')
-      .replace(/^(?!<[h|u|l])(.+)$/gm, '<p>$1</p>');
   }
 }
 
@@ -853,16 +833,16 @@ export class StatusCardComponentRenderer extends BaseComponentRenderer {
 
     container.innerHTML = `
       <div class="status-card-header ${collapsible ? 'collapsible' : ''}">
-        <div class="status-card-icon">${statusIcon}</div>
+        <div class="status-card-icon">${escapeHtml(statusIcon)}</div>
         <div class="status-card-title-section">
-          <h3 class="status-card-title">${title}</h3>
-          <span class="status-card-badge status-${status}">${status}</span>
+          <h3 class="status-card-title">${escapeHtml(title)}</h3>
+          <span class="status-card-badge status-${escapeHtml(status)}">${escapeHtml(status)}</span>
         </div>
         ${collapsible ? `<button class="status-card-toggle">${collapsed ? '▶' : '▼'}</button>` : ''}
       </div>
       ${description ? `
         <div class="status-card-content ${collapsed ? 'collapsed' : ''}">
-          ${description}
+          ${escapeHtml(description)}
         </div>
       ` : ''}
       ${hasMetadata ? `
@@ -876,8 +856,8 @@ export class StatusCardComponentRenderer extends BaseComponentRenderer {
       ${actions.length > 0 ? `
         <div class="status-card-actions">
           ${actions.map((action: any) => `
-            <button class="status-card-action ${action.variant || 'secondary'}" data-action="${action.action}">
-              ${action.label}
+            <button class="status-card-action ${escapeHtml(action.variant || 'secondary')}" data-action="${escapeHtml(action.action)}">
+              ${escapeHtml(action.label)}
             </button>
           `).join('')}
         </div>
@@ -905,7 +885,7 @@ export class StatusCardComponentRenderer extends BaseComponentRenderer {
       const formattedValue = this.formatMetadataValue(value);
       return `
         <tr>
-          <td class="metadata-key">${this.escapeHtml(key)}</td>
+          <td class="metadata-key">${escapeHtml(key)}</td>
           <td class="metadata-value">${formattedValue}</td>
         </tr>
       `;
@@ -934,24 +914,18 @@ export class StatusCardComponentRenderer extends BaseComponentRenderer {
       return '<span class="metadata-undefined">undefined</span>';
     }
     if (typeof value === 'boolean') {
-      return `<span class="metadata-boolean">${value}</span>`;
+      return `<span class="metadata-boolean">${escapeHtml(value)}</span>`;
     }
     if (typeof value === 'number') {
-      return `<span class="metadata-number">${value}</span>`;
+      return `<span class="metadata-number">${escapeHtml(value)}</span>`;
     }
     if (typeof value === 'string') {
-      return `<span class="metadata-string">${this.escapeHtml(value)}</span>`;
+      return `<span class="metadata-string">${escapeHtml(value)}</span>`;
     }
     if (Array.isArray(value) || typeof value === 'object') {
-      return `<pre class="metadata-json">${JSON.stringify(value, null, 2)}</pre>`;
+      return `<pre class="metadata-json">${escapeHtml(JSON.stringify(value, null, 2))}</pre>`;
     }
-    return this.escapeHtml(String(value));
-  }
-
-  private escapeHtml(text: string): string {
-    const div = document.createElement('div');
-    div.textContent = text;
-    return div.innerHTML;
+    return escapeHtml(value);
   }
 
   private getStatusIcon(status: string): string {
@@ -981,14 +955,14 @@ export class ProgressDisplayComponentRenderer extends BaseComponentRenderer {
     container.innerHTML = `
       <div class="progress-display-container">
         <div class="progress-display-header">
-          <span class="progress-display-label">${label}</span>
+          <span class="progress-display-label">${escapeHtml(label)}</span>
           ${show_percentage && !indeterminate ? `<span class="progress-display-percentage">${percentage}%</span>` : ''}
         </div>
         <div class="progress-display-track">
-          <div class="progress-display-fill ${animated ? 'animated' : ''} ${status ? `status-${status}` : ''} ${indeterminate ? 'indeterminate' : ''}"
+          <div class="progress-display-fill ${animated ? 'animated' : ''} ${status ? `status-${escapeHtml(status)}` : ''} ${indeterminate ? 'indeterminate' : ''}"
                style="width: ${indeterminate ? '100' : percentage}%"></div>
         </div>
-        ${description ? `<div class="progress-display-description">${description}</div>` : ''}
+        ${description ? `<div class="progress-display-description">${escapeHtml(description)}</div>` : ''}
       </div>
     `;
 
@@ -1008,7 +982,7 @@ export class LogViewerComponentRenderer extends BaseComponentRenderer {
     container.innerHTML = `
       <div class="log-viewer-container">
         <div class="log-viewer-header">
-          <h3 class="log-viewer-title">${title}</h3>
+          <h3 class="log-viewer-title">${escapeHtml(title)}</h3>
           ${searchable ? `
             <div class="log-viewer-search">
               <input type="text" placeholder="Search logs..." class="log-search-input">
@@ -1017,10 +991,10 @@ export class LogViewerComponentRenderer extends BaseComponentRenderer {
         </div>
         <div class="log-viewer-content ${auto_scroll ? 'auto-scroll' : ''}">
           ${entries.map((entry: any) => `
-            <div class="log-entry log-${entry.level}">
-              ${show_timestamps ? `<span class="log-timestamp">${new Date(entry.timestamp).toLocaleTimeString()}</span>` : ''}
-              <span class="log-level">[${entry.level.toUpperCase()}]</span>
-              <span class="log-message">${entry.message}</span>
+            <div class="log-entry log-${escapeHtml(entry.level)}">
+              ${show_timestamps ? `<span class="log-timestamp">${escapeHtml(new Date(entry.timestamp).toLocaleTimeString())}</span>` : ''}
+              <span class="log-level">[${escapeHtml(String(entry.level).toUpperCase())}]</span>
+              <span class="log-message">${escapeHtml(entry.message)}</span>
             </div>
           `).join('')}
         </div>
@@ -1049,8 +1023,8 @@ export class BadgeComponentRenderer extends BaseComponentRenderer {
     const { text, icon } = component.data;
 
     container.innerHTML = `
-      ${icon ? `<span class="badge-icon">${icon}</span>` : ''}
-      <span class="badge-text">${text}</span>
+      ${icon ? `<span class="badge-icon">${escapeHtml(icon)}</span>` : ''}
+      <span class="badge-text">${escapeHtml(text)}</span>
     `;
 
     return container;
@@ -1067,8 +1041,8 @@ export class IconTextComponentRenderer extends BaseComponentRenderer {
     const { icon, text } = component.data;
 
     container.innerHTML = `
-      <span class="icon-text-icon">${icon}</span>
-      <span class="icon-text-text">${text}</span>
+      <span class="icon-text-icon">${escapeHtml(icon)}</span>
+      <span class="icon-text-text">${escapeHtml(text)}</span>
     `;
 
     return container;
@@ -1099,15 +1073,15 @@ export class ButtonComponentRenderer extends BaseComponentRenderer {
     // Build button content
     let buttonContent = '';
     if (loading) {
-      buttonContent = `<span class="button-spinner">⏳</span><span class="button-label">${label}</span>`;
+      buttonContent = `<span class="button-spinner">⏳</span><span class="button-label">${escapeHtml(label)}</span>`;
     } else if (icon) {
       if (icon_position === 'right') {
-        buttonContent = `<span class="button-label">${label}</span><span class="button-icon">${icon}</span>`;
+        buttonContent = `<span class="button-label">${escapeHtml(label)}</span><span class="button-icon">${escapeHtml(icon)}</span>`;
       } else {
-        buttonContent = `<span class="button-icon">${icon}</span><span class="button-label">${label}</span>`;
+        buttonContent = `<span class="button-icon">${escapeHtml(icon)}</span><span class="button-label">${escapeHtml(label)}</span>`;
       }
     } else {
-      buttonContent = `<span class="button-label">${label}</span>`;
+      buttonContent = `<span class="button-label">${escapeHtml(label)}</span>`;
     }
 
     button.innerHTML = buttonContent;
@@ -1218,12 +1192,12 @@ export class ButtonGroupComponentRenderer extends BaseComponentRenderer {
       let buttonContent = '';
       if (buttonConfig.icon) {
         if (buttonConfig.icon_position === 'right') {
-          buttonContent = `<span class="button-label">${buttonConfig.label}</span><span class="button-icon">${buttonConfig.icon}</span>`;
+          buttonContent = `<span class="button-label">${escapeHtml(buttonConfig.label)}</span><span class="button-icon">${escapeHtml(buttonConfig.icon)}</span>`;
         } else {
-          buttonContent = `<span class="button-icon">${buttonConfig.icon}</span><span class="button-label">${buttonConfig.label}</span>`;
+          buttonContent = `<span class="button-icon">${escapeHtml(buttonConfig.icon)}</span><span class="button-label">${escapeHtml(buttonConfig.label)}</span>`;
         }
       } else {
-        buttonContent = `<span class="button-label">${buttonConfig.label}</span>`;
+        buttonContent = `<span class="button-label">${escapeHtml(buttonConfig.label)}</span>`;
       }
 
       button.innerHTML = buttonContent;
@@ -1340,7 +1314,7 @@ export class ChartComponentRenderer extends BaseComponentRenderer {
       if (title) {
         container.innerHTML = `
           <div class="chart-header">
-            <h3 class="chart-title">${title}</h3>
+            <h3 class="chart-title">${escapeHtml(title)}</h3>
           </div>
           <div class="chart-content"></div>
         `;
@@ -1365,7 +1339,7 @@ export class ChartComponentRenderer extends BaseComponentRenderer {
       container.innerHTML = `
         <div class="chart-error">
           <p>Invalid chart data format</p>
-          <pre>${JSON.stringify(component.data, null, 2).substring(0, 200)}...</pre>
+          <pre>${escapeHtml(JSON.stringify(component.data, null, 2).substring(0, 200))}...</pre>
         </div>
       `;
     }
@@ -1373,6 +1347,11 @@ export class ChartComponentRenderer extends BaseComponentRenderer {
     return container;
   }
 }
+
+// Artifacts are generated HTML/JS. They run in an opaque origin
+// (no allow-same-origin), so their scripts cannot read this page, its cookies
+// or its storage, or call the Vanna API as the user.
+const ARTIFACT_SANDBOX = 'allow-scripts';
 
 // Artifact component renderer
 export class ArtifactComponentRenderer extends BaseComponentRenderer {
@@ -1400,9 +1379,9 @@ export class ArtifactComponentRenderer extends BaseComponentRenderer {
     container.innerHTML = `
       <div class="artifact-header">
         <div class="artifact-meta">
-          <h3 class="artifact-title">${title || 'Artifact'}</h3>
-          ${description ? `<p class="artifact-description">${description}</p>` : ''}
-          <span class="artifact-type-badge">${artifact_type}</span>
+          <h3 class="artifact-title">${escapeHtml(title || 'Artifact')}</h3>
+          ${description ? `<p class="artifact-description">${escapeHtml(description)}</p>` : ''}
+          <span class="artifact-type-badge">${escapeHtml(artifact_type)}</span>
         </div>
         <div class="artifact-controls">
           ${editable ? '<button class="artifact-btn edit-btn" title="Edit">✏️</button>' : ''}
@@ -1411,7 +1390,7 @@ export class ArtifactComponentRenderer extends BaseComponentRenderer {
         </div>
       </div>
       <div class="artifact-preview">
-        <iframe class="artifact-iframe" sandbox="allow-scripts allow-same-origin" srcdoc="${this.escapeHtml(content)}"></iframe>
+        <iframe class="artifact-iframe" sandbox="${ARTIFACT_SANDBOX}" srcdoc="${escapeHtml(content)}"></iframe>
       </div>
     `;
 
@@ -1428,8 +1407,8 @@ export class ArtifactComponentRenderer extends BaseComponentRenderer {
           <div class="placeholder-content">
             <span class="placeholder-icon">🎨</span>
             <div class="placeholder-text">
-              <strong>${title || 'Artifact'}</strong> opened externally
-              <div class="placeholder-type">${artifact_type}</div>
+              <strong>${escapeHtml(title || 'Artifact')}</strong> opened externally
+              <div class="placeholder-type">${escapeHtml(artifact_type)}</div>
             </div>
             <button class="placeholder-reopen" title="Reopen">↗</button>
           </div>
@@ -1548,7 +1527,7 @@ export class ArtifactComponentRenderer extends BaseComponentRenderer {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>${title || 'Artifact'}</title>
+    <title>${escapeHtml(title || 'Artifact')}</title>
     ${dependenciesHTML}
     <style>
         body {
@@ -1571,10 +1550,23 @@ export class ArtifactComponentRenderer extends BaseComponentRenderer {
   }
 
   private handleDefaultAction(component: RichComponent): void {
-    // Default action: open in new window
+    // Default action: open in a new window. A window opened with
+    // window.open('') shares this page's origin, so the artifact is loaded
+    // into a sandboxed iframe inside it instead of being written directly.
     const newWindow = window.open('', '_blank', 'width=800,height=600');
     if (newWindow) {
-      newWindow.document.write(this.generateStandaloneHTML(component));
+      newWindow.opener = null;
+      newWindow.document.write(`<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>${escapeHtml(component.data.title || 'Artifact')}</title>
+  <style>html, body, iframe { margin: 0; width: 100%; height: 100%; border: 0; }</style>
+</head>
+<body>
+  <iframe sandbox="${ARTIFACT_SANDBOX}" srcdoc="${escapeHtml(this.generateStandaloneHTML(component))}"></iframe>
+</body>
+</html>`);
       newWindow.document.close();
     }
   }
@@ -1585,11 +1577,11 @@ export class ArtifactComponentRenderer extends BaseComponentRenderer {
     overlay.className = 'artifact-fullscreen-overlay';
     overlay.innerHTML = `
       <div class="fullscreen-header">
-        <h3>${component.data.title || 'Artifact'}</h3>
+        <h3>${escapeHtml(component.data.title || 'Artifact')}</h3>
         <button class="close-fullscreen">✕</button>
       </div>
       <div class="fullscreen-content">
-        <iframe class="fullscreen-iframe" sandbox="allow-scripts allow-same-origin" srcdoc="${this.escapeHtml(component.data.content)}"></iframe>
+        <iframe class="fullscreen-iframe" sandbox="${ARTIFACT_SANDBOX}" srcdoc="${escapeHtml(component.data.content)}"></iframe>
       </div>
     `;
 
@@ -1649,12 +1641,6 @@ export class ArtifactComponentRenderer extends BaseComponentRenderer {
   private openEditor(component: RichComponent): void {
     // Placeholder for future editor implementation
     console.log('Editor functionality not yet implemented for artifact:', component.data.artifact_id);
-  }
-
-  private escapeHtml(html: string): string {
-    const div = document.createElement('div');
-    div.textContent = html;
-    return div.innerHTML.replace(/"/g, '&quot;');
   }
 }
 
@@ -1800,9 +1786,9 @@ export class ComponentRegistry {
 
     container.innerHTML = `
       <div class="fallback-header">
-        <strong>Unknown Component: ${component.type}</strong>
+        <strong>Unknown Component: ${escapeHtml(component.type)}</strong>
       </div>
-      <pre class="fallback-data">${JSON.stringify(component.data, null, 2)}</pre>
+      <pre class="fallback-data">${escapeHtml(JSON.stringify(component.data, null, 2))}</pre>
     `;
 
     return container;

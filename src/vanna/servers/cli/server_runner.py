@@ -79,7 +79,11 @@ class ExampleAgentLoader:
     help="Web framework to use",
 )
 @click.option("--port", default=8000, help="Port to run server on")
-@click.option("--host", default="0.0.0.0", help="Host to bind server to")
+@click.option(
+    "--host",
+    default="127.0.0.1",
+    help="Host to bind server to (use 0.0.0.0 to listen on all interfaces)",
+)
 @click.option(
     "--example", help="Example agent to use (use --list-examples to see options)"
 )
@@ -87,7 +91,11 @@ class ExampleAgentLoader:
 @click.option(
     "--config", type=click.File("r"), help="JSON config file for server settings"
 )
-@click.option("--debug", is_flag=True, help="Enable debug mode")
+@click.option(
+    "--debug",
+    is_flag=True,
+    help="Enable Flask debug mode (localhost only: it enables the Werkzeug debugger)",
+)
 @click.option(
     "--dev",
     is_flag=True,
@@ -121,6 +129,16 @@ def main(
         for name, description in examples.items():
             click.echo(f"  {name:20} - {description}")
         return
+
+    # Flask's debug mode serves the Werkzeug debugger, whose console runs
+    # Python code; never expose it beyond this machine.
+    if debug and framework == "flask" and host not in ("127.0.0.1", "localhost", "::1"):
+        click.echo(
+            "Error: --debug enables the Werkzeug debugger and can only be used "
+            "with --host 127.0.0.1, localhost or ::1.",
+            err=True,
+        )
+        raise SystemExit(2)
 
     # Load configuration
     server_config = {}

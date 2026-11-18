@@ -5,6 +5,7 @@ import sys
 import uuid
 from abc import ABC, abstractmethod
 from functools import wraps
+from typing import Optional
 import importlib.metadata
 
 import flask
@@ -92,8 +93,24 @@ class MemoryCache(Cache):
             del self.cache[id]
 
 
+_LOOPBACK_HOSTS = ("127.0.0.1", "localhost", "::1")
+
+
 class VannaFlaskAPI:
     flask_app = None
+
+    @staticmethod
+    def _owner_key(user) -> str:
+        """Identify the user that owns a cache entry.
+
+        ``AuthInterface.get_user`` should return a JSON-serialisable value
+        (for example the user's email or a dict of claims) that is the same on
+        every request from that user.
+        """
+        try:
+            return json.dumps(user, sort_keys=True, default=str)
+        except (TypeError, ValueError):
+            return str(user)
 
     def requires_cache(self, required_fields, optional_fields=[]):
         def decorator(f):
@@ -105,6 +122,13 @@ class VannaFlaskAPI:
                     id = request.json.get("id")
                     if id is None:
                         return jsonify({"type": "error", "error": "No id provided"})
+
+                # Cache entries hold a user's question, SQL and results. Only
+                # the user who created an entry may read or change it, so an
+                # id seen by (or guessed by) another user is not enough.
+                owner = self.cache.get(id=id, field="owner")
+                if owner is None or owner != self._owner_key(kwargs.get("user")):
+                    return jsonify({"type": "error", "error": "No question found"})
 
                 for field in required_fields:
                     if self.cache.get(id=id, field=field) is None:
@@ -145,8 +169,8 @@ class VannaFlaskAPI:
     def __init__(
         self,
         vn: VannaBase,
-        cache: Cache = MemoryCache(),
-        auth: AuthInterface = NoAuth(),
+        cache: Optional[Cache] = None,
+        auth: Optional[AuthInterface] = None,
         debug=True,
         allow_llm_to_see_data=False,
         chart=True,
@@ -156,8 +180,8 @@ class VannaFlaskAPI:
 
         Args:
             vn: The Vanna instance to interact with.
-            cache: The cache to use. Defaults to MemoryCache, which uses an in-memory cache. You can also pass in a custom cache that implements the Cache interface.
-            auth: The authentication method to use. Defaults to NoAuth, which doesn't require authentication. You can also pass in a custom authentication method that implements the AuthInterface interface.
+            cache: The cache to use. Defaults to a new MemoryCache, which uses an in-memory cache. You can also pass in a custom cache that implements the Cache interface.
+            auth: The authentication method to use. Defaults to NoAuth, which doesn't require authentication, so anyone who can reach the server can run SQL against your database. Use a custom AuthInterface whenever the app is reachable by others.
             debug: Show the debug console. Defaults to True.
             allow_llm_to_see_data: Whether to allow the LLM to see data. Defaults to False.
             chart: Whether to show the chart output in the UI. Defaults to True.
@@ -174,8 +198,10 @@ class VannaFlaskAPI:
         self.sock = Sock(self.flask_app)
         self.ws_clients = []
         self.vn = vn
-        self.auth = auth
-        self.cache = cache
+        # Create the defaults per instance; a shared default cache would mix
+        # the questions and results of every app in the process.
+        self.auth = auth if auth is not None else NoAuth()
+        self.cache = cache if cache is not None else MemoryCache()
         self.debug = debug
         self.allow_llm_to_see_data = allow_llm_to_see_data
         self.chart = chart
@@ -340,6 +366,7 @@ class VannaFlaskAPI:
                 question=question, allow_llm_to_see_data=self.allow_llm_to_see_data
             )
 
+            self.cache.set(id=id, field="owner", value=self._owner_key(user))
             self.cache.set(id=id, field="question", value=question)
             self.cache.set(id=id, field="sql", value=sql)
 
@@ -437,6 +464,7 @@ class VannaFlaskAPI:
                 self.vn.log(f"No instantiated SQL found for {question} in {function}")
                 return jsonify({"type": "error", "error": "No instantiated SQL found"})
 
+            self.cache.set(id=id, field="owner", value=self._owner_key(user))
             self.cache.set(id=id, field="question", value=question)
             self.cache.set(id=id, field="sql", value=function["instantiated_sql"])
 
@@ -632,6 +660,12 @@ class VannaFlaskAPI:
                     text:
                       type: string
             """
+            # Editing SQL directly is a UI feature; when the SQL editor is
+            # turned off (VannaFlaskApp(sql=False)) users must not be able to
+            # run arbitrary SQL through the API either.
+            if not self.config.get("sql", True):
+                return jsonify({"type": "error", "error": "Editing SQL is disabled"})
+
             sql = flask.request.json.get("sql")
 
             if sql is None:
@@ -1146,10 +1180,16 @@ class VannaFlaskAPI:
                       items:
                         type: string
             """
+            owner = self._owner_key(user)
+            questions = [
+                {key: value for key, value in entry.items() if key != "owner"}
+                for entry in self.cache.get_all(field_list=["question", "owner"])
+                if entry.get("owner") == owner
+            ]
             return jsonify(
                 {
                     "type": "question_history",
-                    "questions": cache.get_all(field_list=["question"]),
+                    "questions": questions,
                 }
             )
 
@@ -1191,6 +1231,13 @@ class VannaFlaskAPI:
             None
         """
         if args or kwargs:
+            host = kwargs.get("host", args[0] if args else None)
+            if isinstance(self.auth, NoAuth) and host not in (None, *_LOOPBACK_HOSTS):
+                print(
+                    "WARNING: Vanna is running without authentication on "
+                    f"{host}. Anyone who can reach this address can run SQL "
+                    "against your database. Pass an AuthInterface as `auth`."
+                )
             self.flask_app.run(*args, **kwargs)
 
         else:
@@ -1207,10 +1254,13 @@ class VannaFlaskAPI:
                 print("http://localhost:8084")
 
             # `debug` only controls Vanna's log console. Never enable Flask's
-            # debug mode here: it exposes the Werkzeug debugger (and its
-            # interactive console) on every network interface.
+            # debug mode here: it exposes the Werkzeug debugger and its
+            # interactive console.
+            # Listen on localhost only by default: with the default NoAuth,
+            # anyone who can reach the server can run SQL. Call
+            # run(host="0.0.0.0", port=8084) to expose it deliberately.
             self.flask_app.run(
-                host="0.0.0.0", port=8084, debug=False, use_reloader=False
+                host="127.0.0.1", port=8084, debug=False, use_reloader=False
             )
 
 
@@ -1218,8 +1268,8 @@ class VannaFlaskApp(VannaFlaskAPI):
     def __init__(
         self,
         vn: VannaBase,
-        cache: Cache = MemoryCache(),
-        auth: AuthInterface = NoAuth(),
+        cache: Optional[Cache] = None,
+        auth: Optional[AuthInterface] = None,
         debug=True,
         allow_llm_to_see_data=False,
         logo="https://img.vanna.ai/vanna-flask.svg",
@@ -1245,8 +1295,8 @@ class VannaFlaskApp(VannaFlaskAPI):
 
         Args:
             vn: The Vanna instance to interact with.
-            cache: The cache to use. Defaults to MemoryCache, which uses an in-memory cache. You can also pass in a custom cache that implements the Cache interface.
-            auth: The authentication method to use. Defaults to NoAuth, which doesn't require authentication. You can also pass in a custom authentication method that implements the AuthInterface interface.
+            cache: The cache to use. Defaults to a new MemoryCache, which uses an in-memory cache. You can also pass in a custom cache that implements the Cache interface.
+            auth: The authentication method to use. Defaults to NoAuth, which doesn't require authentication, so anyone who can reach the server can run SQL against your database. Use a custom AuthInterface whenever the app is reachable by others.
             debug: Show the debug console. Defaults to True.
             allow_llm_to_see_data: Whether to allow the LLM to see data. Defaults to False.
             logo: The logo to display in the UI. Defaults to the Vanna logo.

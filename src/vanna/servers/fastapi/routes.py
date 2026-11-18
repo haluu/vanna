@@ -4,7 +4,8 @@ FastAPI route implementations for Vanna Agents.
 
 import json
 import traceback
-from typing import Any, AsyncGenerator, Dict, Optional
+from typing import Any, AsyncGenerator, Collection, Dict, Optional
+from urllib.parse import urlsplit
 
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import StreamingResponse, HTMLResponse
@@ -12,6 +13,36 @@ from fastapi.responses import StreamingResponse, HTMLResponse
 from ..base import ChatHandler, ChatRequest, ChatResponse
 from ..base.templates import get_index_html
 from ...core.user.request_context import RequestContext
+
+
+def _websocket_origin_allowed(
+    websocket: WebSocket, allowed_origins: Collection[str]
+) -> bool:
+    """Check the Origin of a WebSocket handshake.
+
+    WebSockets are not covered by CORS and the browser sends the user's
+    cookies with the handshake, so without this check any website could open
+    a chat as the logged-in user (cross-site WebSocket hijacking).
+
+    Allowed: clients that send no Origin (not browsers), same-origin pages
+    (Origin matches Host, or X-Forwarded-Host behind a proxy; browsers cannot
+    set either header on a WebSocket) and origins listed in the config.
+    """
+    origin = websocket.headers.get("origin")
+    if origin is None:
+        return True
+    if "*" in allowed_origins or origin in allowed_origins:
+        return True
+
+    origin_host = urlsplit(origin).netloc.lower()
+    if not origin_host:
+        return False
+    forwarded_host = websocket.headers.get("x-forwarded-host", "")
+    candidates = {
+        websocket.headers.get("host", "").lower(),
+        forwarded_host.split(",")[0].strip().lower(),
+    }
+    return origin_host in candidates
 
 
 def register_chat_routes(
@@ -26,6 +57,16 @@ def register_chat_routes(
     """
     config = config or {}
 
+    # Cross-origin pages that may use the chat WebSocket: the explicit
+    # "websocket_allowed_origins" list plus origins listed for CORS ("*" in
+    # the CORS list does not count, matching the credential rules there).
+    allowed_ws_origins = set(config.get("websocket_allowed_origins", []))
+    allowed_ws_origins.update(
+        origin
+        for origin in config.get("cors", {}).get("allow_origins", [])
+        if origin != "*"
+    )
+
     @app.get("/", response_class=HTMLResponse)
     async def index() -> str:
         """Serve the main chat interface."""
@@ -34,7 +75,10 @@ def register_chat_routes(
         api_base_url = config.get("api_base_url", "")
 
         return get_index_html(
-            dev_mode=dev_mode, cdn_url=cdn_url, api_base_url=api_base_url
+            dev_mode=dev_mode,
+            cdn_url=cdn_url,
+            api_base_url=api_base_url,
+            cdn_integrity=config.get("cdn_integrity"),
         )
 
     @app.post("/api/vanna/v2/chat_sse")
@@ -82,6 +126,11 @@ def register_chat_routes(
     @app.websocket("/api/vanna/v2/chat_websocket")
     async def chat_websocket(websocket: WebSocket) -> None:
         """WebSocket endpoint for real-time chat."""
+        if not _websocket_origin_allowed(websocket, allowed_ws_origins):
+            # Policy violation; Starlette rejects the handshake with HTTP 403.
+            await websocket.close(code=1008)
+            return
+
         await websocket.accept()
 
         try:

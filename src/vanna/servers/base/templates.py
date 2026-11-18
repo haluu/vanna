@@ -2,13 +2,112 @@
 HTML templates for Vanna Agents servers.
 """
 
+from html import escape
 from typing import Optional
+
+# Styles for the utility classes used by the page below (Tailwind naming).
+# They are inlined instead of loading the Tailwind Play CDN, which runs a
+# third-party script on the page and is not meant for production.
+_PAGE_CSS = r"""
+*, ::before, ::after { box-sizing: border-box; border: 0 solid #e5e7eb; }
+html { font-family: 'Space Grotesk', ui-sans-serif, system-ui; line-height: 1.5; -webkit-text-size-adjust: 100%; }
+body { margin: 0; line-height: inherit; }
+h1, h2, h3, p, ul { margin: 0; }
+h1, h2, h3 { font-size: inherit; font-weight: inherit; }
+ul { list-style: none; padding: 0; }
+a { color: inherit; text-decoration: inherit; }
+button, select { font: inherit; color: inherit; margin: 0; }
+button { background-color: transparent; background-image: none; cursor: pointer; }
+svg { display: block; vertical-align: middle; }
+.block { display: block; }
+.hidden { display: none; }
+.inline-flex { display: inline-flex; }
+.items-center { align-items: center; }
+.gap-2 { gap: 0.5rem; }
+.overflow-hidden { overflow: hidden; }
+.mx-auto { margin-left: auto; margin-right: auto; }
+.max-w-6xl { max-width: 72rem; }
+.max-w-md { max-width: 28rem; }
+.w-full { width: 100%; }
+.w-5 { width: 1.25rem; }
+.h-5 { height: 1.25rem; }
+.h-\[600px\] { height: 600px; }
+.p-2 { padding: 0.5rem; }
+.p-3 { padding: 0.75rem; }
+.p-4 { padding: 1rem; }
+.p-5 { padding: 1.25rem; }
+.p-8 { padding: 2rem; }
+.p-10 { padding: 2.5rem; }
+.px-3 { padding-left: 0.75rem; padding-right: 0.75rem; }
+.px-4 { padding-left: 1rem; padding-right: 1rem; }
+.py-1\.5 { padding-top: 0.375rem; padding-bottom: 0.375rem; }
+.py-2 { padding-top: 0.5rem; padding-bottom: 0.5rem; }
+.py-3 { padding-top: 0.75rem; padding-bottom: 0.75rem; }
+.mb-2 { margin-bottom: 0.5rem; }
+.mb-3 { margin-bottom: 0.75rem; }
+.mb-4 { margin-bottom: 1rem; }
+.mb-5 { margin-bottom: 1.25rem; }
+.mb-6 { margin-bottom: 1.5rem; }
+.mb-8 { margin-bottom: 2rem; }
+.mb-10 { margin-bottom: 2.5rem; }
+.mr-2 { margin-right: 0.5rem; }
+.mt-2 { margin-top: 0.5rem; }
+.mt-5 { margin-top: 1.25rem; }
+.mt-8 { margin-top: 2rem; }
+.space-y-2 > :not([hidden]) ~ :not([hidden]) { margin-top: 0.5rem; }
+.text-center { text-align: center; }
+.text-xs { font-size: 0.75rem; line-height: 1rem; }
+.text-sm { font-size: 0.875rem; line-height: 1.25rem; }
+.text-lg { font-size: 1.125rem; line-height: 1.75rem; }
+.text-xl { font-size: 1.25rem; line-height: 1.75rem; }
+.text-2xl { font-size: 1.5rem; line-height: 2rem; }
+.text-4xl { font-size: 2.25rem; line-height: 2.5rem; }
+.font-medium { font-weight: 500; }
+.font-semibold { font-weight: 600; }
+.font-bold { font-weight: 700; }
+.font-serif { font-family: 'Roboto Slab', ui-serif, Georgia; }
+.font-mono { font-family: 'Space Mono', ui-monospace, monospace; }
+.leading-relaxed { line-height: 1.625; }
+.text-white { color: #fff; }
+.text-gray-400 { color: #9ca3af; }
+.text-gray-600 { color: #4b5563; }
+.text-slate-600 { color: #475569; }
+.text-vanna-navy { color: #023d60; }
+.text-vanna-teal { color: #15a8a8; }
+.text-vanna-orange { color: #fe5d26; }
+.bg-white { background-color: #fff; }
+.bg-vanna-navy { background-color: #023d60; }
+.bg-vanna-teal { background-color: #15a8a8; }
+.bg-vanna-teal\/10 { background-color: rgba(21, 168, 168, 0.1); }
+.bg-vanna-orange\/10 { background-color: rgba(254, 93, 38, 0.1); }
+.bg-vanna-cream\/50 { background-color: rgba(231, 225, 207, 0.5); }
+.border { border-width: 1px; }
+.border-l-4 { border-left-width: 4px; }
+.border-vanna-teal { border-color: #15a8a8; }
+.border-vanna-teal\/30 { border-color: rgba(21, 168, 168, 0.3); }
+.border-vanna-orange\/30 { border-color: rgba(254, 93, 38, 0.3); }
+.rounded { border-radius: 0.25rem; }
+.rounded-lg { border-radius: 0.5rem; }
+.rounded-xl { border-radius: 0.75rem; }
+.shadow { box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.1), 0 1px 2px -1px rgba(0, 0, 0, 0.1); }
+.shadow-lg { box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -4px rgba(0, 0, 0, 0.1); }
+.transition { transition-property: color, background-color, border-color, opacity, box-shadow, transform; transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1); transition-duration: 150ms; }
+.hover\:bg-vanna-navy:hover { background-color: #023d60; }
+.hover\:bg-vanna-teal:hover { background-color: #15a8a8; }
+.focus\:outline-none:focus { outline: 2px solid transparent; outline-offset: 2px; }
+.focus\:border-transparent:focus { border-color: transparent; }
+.focus\:ring-offset-2:focus { --ring-offset: 2px; }
+.focus\:ring-2:focus { box-shadow: 0 0 0 var(--ring-offset, 0px) #fff, 0 0 0 calc(2px + var(--ring-offset, 0px)) #15a8a8; }
+.disabled\:bg-gray-400:disabled { background-color: #9ca3af; }
+.disabled\:cursor-not-allowed:disabled { cursor: not-allowed; }
+"""
 
 
 def get_vanna_component_script(
     dev_mode: bool = False,
     static_path: str = "/static",
     cdn_url: str = "https://img.vanna.ai/vanna-components.js",
+    cdn_integrity: Optional[str] = None,
 ) -> str:
     """Get the script tag for loading Vanna web components.
 
@@ -16,16 +115,23 @@ def get_vanna_component_script(
         dev_mode: If True, load from local static files
         static_path: Path to static assets in dev mode
         cdn_url: CDN URL for production
+        cdn_integrity: Subresource Integrity hash of the file at ``cdn_url``
+            (for example ``"sha384-..."``). The browser refuses to run the
+            script if the CDN serves anything else. Recommended together with
+            a ``cdn_url`` that points at a fixed version, or self-host the
+            components with ``dev_mode``/``static_path``.
 
     Returns:
         HTML script tag for loading components
     """
     if dev_mode:
+        return f'<script type="module" src="{escape(static_path)}/vanna-components.js"></script>'
+    if cdn_integrity:
         return (
-            f'<script type="module" src="{static_path}/vanna-components.js"></script>'
+            f'<script type="module" src="{escape(cdn_url)}" '
+            f'integrity="{escape(cdn_integrity)}" crossorigin="anonymous"></script>'
         )
-    else:
-        return f'<script type="module" src="{cdn_url}"></script>'
+    return f'<script type="module" src="{escape(cdn_url)}"></script>'
 
 
 def get_index_html(
@@ -33,6 +139,7 @@ def get_index_html(
     static_path: str = "/static",
     cdn_url: str = "https://img.vanna.ai/vanna-components.js",
     api_base_url: str = "",
+    cdn_integrity: Optional[str] = None,
 ) -> str:
     """Generate index HTML with configurable component loading.
 
@@ -41,11 +148,14 @@ def get_index_html(
         static_path: Path to static assets in dev mode
         cdn_url: CDN URL for production components
         api_base_url: Base URL for API endpoints
+        cdn_integrity: Optional Subresource Integrity hash for ``cdn_url``
 
     Returns:
         Complete HTML page as string
     """
-    component_script = get_vanna_component_script(dev_mode, static_path, cdn_url)
+    component_script = get_vanna_component_script(
+        dev_mode, static_path, cdn_url, cdn_integrity
+    )
 
     return f"""<!DOCTYPE html>
 <html lang="en">
@@ -56,27 +166,7 @@ def get_index_html(
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Roboto+Slab:wght@400;500;600;700&family=Space+Grotesk:wght@300;400;500;600;700&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
-    <script src="https://cdn.tailwindcss.com"></script>
-    <script>
-        tailwind.config = {{
-            theme: {{
-                extend: {{
-                    colors: {{
-                        'vanna-navy': '#023d60',
-                        'vanna-cream': '#e7e1cf',
-                        'vanna-teal': '#15a8a8',
-                        'vanna-orange': '#fe5d26',
-                        'vanna-magenta': '#bf1363',
-                    }},
-                    fontFamily: {{
-                        'sans': ['Space Grotesk', 'ui-sans-serif', 'system-ui'],
-                        'serif': ['Roboto Slab', 'ui-serif', 'Georgia'],
-                        'mono': ['Space Mono', 'ui-monospace', 'monospace'],
-                    }}
-                }}
-            }}
-        }}
-    </script>
+    <style>{_PAGE_CSS}</style>
     <style>
         body {{
             background: linear-gradient(to bottom, #e7e1cf, #ffffff, #e7e1cf);
@@ -286,14 +376,25 @@ def get_index_html(
 
                     console.log('🎨 Artifact Event:', {{ artifactId, type, title, trigger }});
 
-                    // For demo: open all artifacts externally
+                    // For demo: open all artifacts externally.
+                    // A window opened with window.open('') shares this page's
+                    // origin, so the artifact (generated HTML/JS) is loaded
+                    // into a sandboxed iframe in it rather than written
+                    // directly; otherwise it could act as the logged-in user.
                     setTimeout(() => {{
                         const newWindow = window.open('', '_blank', 'width=900,height=700');
                         if (newWindow) {{
-                            newWindow.document.write(event.detail.getStandaloneHTML());
-                            newWindow.document.close();
-                            newWindow.document.title = title || 'Vanna Artifact';
-                            console.log(`📱 Opened ${{title}} in new window`);
+                            newWindow.opener = null;
+                            const doc = newWindow.document;
+                            doc.title = title || 'Vanna Artifact';
+                            doc.documentElement.style.height = '100%';
+                            doc.body.style.cssText = 'margin:0;height:100%';
+                            const frame = doc.createElement('iframe');
+                            frame.setAttribute('sandbox', 'allow-scripts');
+                            frame.style.cssText = 'border:0;width:100%;height:100%';
+                            frame.srcdoc = event.detail.getStandaloneHTML();
+                            doc.body.appendChild(frame);
+                            console.log('📱 Opened artifact in new window:', title);
                         }}
                     }}, 100);
 
@@ -315,7 +416,7 @@ def get_index_html(
                             <h3 class="text-xl font-semibold mb-2">Vanna Chat Component</h3>
                             <p class="mb-2">Web component failed to load. Please check your connection.</p>
                             <p class="text-sm text-gray-400">
-                                {("Loading from: local static assets" if dev_mode else f"Loading from: {cdn_url}")}
+                                {("Loading from: local static assets" if dev_mode else f"Loading from: {escape(cdn_url)}")}
                             </p>
                         </div>
                     `;

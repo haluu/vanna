@@ -16,7 +16,13 @@ MAX_SEARCH_FILE_BYTES = 1_000_000
 
 
 class LocalFileSystem(FileSystem):
-    """Local file system implementation with per-user isolation."""
+    """Local file system implementation with per-user directories.
+
+    File operations are confined to a directory per user. ``run_bash`` is not:
+    commands run as the server's OS user with its full permissions, so tools
+    that call it (bash, Python, pip) must only be given to trusted users or
+    run inside a container or VM.
+    """
 
     def __init__(self, working_directory: str = "."):
         """Initialize with a working directory.
@@ -143,6 +149,7 @@ class LocalFileSystem(FileSystem):
             raise ValueError("Search query must not be empty")
 
         user_dir = self._get_user_directory(context)
+        user_dir_resolved = user_dir.resolve()
         matches: List[FileSearchMatch] = []
         query_lower = trimmed_query.lower()
 
@@ -151,6 +158,12 @@ class LocalFileSystem(FileSystem):
                 break
 
             if not path.is_file():
+                continue
+
+            # Skip symlinks that point outside the user's directory.
+            try:
+                path.resolve().relative_to(user_dir_resolved)
+            except (ValueError, OSError):
                 continue
 
             relative_path = path.relative_to(user_dir).as_posix()

@@ -129,11 +129,18 @@ class VannaFastAPIServer:
         app = self.create_app()
 
         # Set defaults
-        run_kwargs = {"host": "0.0.0.0", "port": 8000, "log_level": "info", **kwargs}
+        # Listen on localhost unless told otherwise (pass host="0.0.0.0" to
+        # expose the server, e.g. in a container).
+        run_kwargs = {
+            "host": "127.0.0.1",
+            "port": 8000,
+            "log_level": "info",
+            **kwargs,
+        }
 
         # Get the port and other config from run_kwargs
         port = run_kwargs.get("port", 8000)
-        host = run_kwargs.get("host", "0.0.0.0")
+        host = run_kwargs.get("host", "127.0.0.1")
         log_level = run_kwargs.get("log_level", "info")
 
         # Check if we're specifically in Google Colab for port forwarding
