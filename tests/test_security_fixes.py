@@ -403,3 +403,54 @@ async def test_conversation_store_prevents_takeover(conversation_store):
     assert await conversation_store.get_conversation("shared", _user("bob")) is None
     alice_view = await conversation_store.get_conversation("shared", _user("alice"))
     assert [m.content for m in alice_view.messages] == ["secret"]
+
+
+# ---------------------------------------------------------------------------
+# FastAPI server: CORS must not allow credentials for every origin by default
+# ---------------------------------------------------------------------------
+
+
+def _fastapi_client(config=None):
+    pytest.importorskip("fastapi")
+    from fastapi.testclient import TestClient
+
+    from vanna.servers.fastapi import VannaFastAPIServer
+
+    return TestClient(VannaFastAPIServer(MagicMock(), config=config).create_app())
+
+
+def test_fastapi_cors_default_does_not_allow_credentials_for_any_origin():
+    client = _fastapi_client()
+
+    response = client.get(
+        "/health",
+        headers={"Origin": "https://evil.example", "Cookie": "vanna_email=alice"},
+    )
+    preflight = client.options(
+        "/api/vanna/v2/chat_sse",
+        headers={
+            "Origin": "https://evil.example",
+            "Access-Control-Request-Method": "POST",
+        },
+    )
+
+    for r in (response, preflight):
+        assert r.headers.get("access-control-allow-credentials") != "true"
+        assert r.headers.get("access-control-allow-origin") != "https://evil.example"
+
+
+def test_fastapi_cors_allows_credentials_for_listed_origins():
+    client = _fastapi_client({"cors": {"allow_origins": ["https://app.example"]}})
+
+    allowed = client.get(
+        "/health",
+        headers={"Origin": "https://app.example", "Cookie": "vanna_email=alice"},
+    )
+    other = client.get(
+        "/health",
+        headers={"Origin": "https://evil.example", "Cookie": "vanna_email=alice"},
+    )
+
+    assert allowed.headers.get("access-control-allow-origin") == "https://app.example"
+    assert allowed.headers.get("access-control-allow-credentials") == "true"
+    assert "access-control-allow-origin" not in other.headers

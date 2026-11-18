@@ -47,9 +47,14 @@ class VannaFastAPIServer:
         if cors_config.get("enabled", True):
             cors_params = {k: v for k, v in cors_config.items() if k != "enabled"}
 
-            # Set sensible defaults
+            # Set sensible defaults. Starlette echoes back any Origin when
+            # allow_origins is "*" and credentials are allowed, which would let
+            # any website make authenticated requests with the user's cookies.
+            # Only allow credentials by default when origins are listed.
             cors_params.setdefault("allow_origins", ["*"])
-            cors_params.setdefault("allow_credentials", True)
+            cors_params.setdefault(
+                "allow_credentials", "*" not in cors_params["allow_origins"]
+            )
             cors_params.setdefault("allow_methods", ["*"])
             cors_params.setdefault("allow_headers", ["*"])
 
