@@ -7,6 +7,7 @@ tool usage patterns with advanced similarity search and analytics.
 
 import json
 from datetime import datetime
+from urllib.parse import quote
 from typing import Any, Dict, List, Optional
 import httpx
 
@@ -130,7 +131,7 @@ class CloudAgentMemory(AgentMemory):
     async def delete_by_id(self, context: ToolContext, memory_id: str) -> bool:
         """Delete a memory by its ID from premium cloud storage."""
         response = await self._client.delete(
-            f"/memory/{memory_id}", headers=self._get_headers()
+            f"/memory/{quote(str(memory_id), safe='')}", headers=self._get_headers()
         )
 
         if response.status_code == 404:

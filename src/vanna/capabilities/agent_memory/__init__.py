@@ -10,6 +10,7 @@ from .models import (
     ToolMemory,
     ToolMemorySearchResult,
 )
+from .user_scoped import UserScopedAgentMemory
 
 __all__ = [
     "AgentMemory",
@@ -18,4 +19,5 @@ __all__ = [
     "ToolMemory",
     "ToolMemorySearchResult",
     "MemoryStats",
+    "UserScopedAgentMemory",
 ]

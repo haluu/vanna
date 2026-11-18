@@ -6,6 +6,7 @@ including comparison reports for evaluating multiple agent variants.
 """
 
 import csv
+from html import escape
 from typing import List, Dict, Optional, Any
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -242,7 +243,7 @@ class ComparisonReport:
             row_class = "best" if variant_name == best_by_score else ""
             html_parts.append(
                 f"<tr class='{row_class}'>"
-                f"<td>{variant_name}</td>"
+                f"<td>{escape(variant_name)}</td>"
                 f"<td>{report.pass_rate():.1%}</td>"
                 f"<td>{report.average_score():.2f}</td>"
                 f"<td>{report.average_time():.0f}</td>"
@@ -256,8 +257,12 @@ class ComparisonReport:
         html_parts.append("<h2>Test Case Details</h2>")
 
         for i, test_case in enumerate(self.test_cases):
-            html_parts.append(f"<h3>Test Case {i + 1}: {test_case.id}</h3>")
-            html_parts.append(f"<p><strong>Message:</strong> {test_case.message}</p>")
+            html_parts.append(
+                f"<h3>Test Case {i + 1}: {escape(str(test_case.id))}</h3>"
+            )
+            html_parts.append(
+                f"<p><strong>Message:</strong> {escape(test_case.message)}</p>"
+            )
 
             html_parts.append("<table>")
             html_parts.append(
@@ -274,7 +279,7 @@ class ComparisonReport:
 
                     html_parts.append(
                         f"<tr>"
-                        f"<td>{variant_name}</td>"
+                        f"<td>{escape(variant_name)}</td>"
                         f"<td class='{passed_class}'>{passed_text}</td>"
                         f"<td>{result.overall_score():.2f}</td>"
                         f"<td>{result.execution_time_ms:.0f}</td>"

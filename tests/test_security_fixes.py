@@ -204,6 +204,23 @@ MALICIOUS_PLOTLY_SNIPPETS = [
     "try:\n    pass\nexcept Exception:\n    pass",
     "with open('{marker}') as f:\n    pass",
     "x = '__class__'",
+    # Calling apply/agg/transform through an alias skipped the argument check
+    "f = df.agg\nf('to_csv', 0, '{marker}')",
+    "[df.agg][0]('to_csv', 0, '{marker}')",
+    "for f in [df.transform]:\n    f('to_csv', 0, '{marker}')",
+    "df.pipe(pd.DataFrame.agg, 'to_csv', 0, '{marker}')",
+    "g = lambda: df.apply\ng()('to_csv', 0, '{marker}')",
+    # '**' hid keyword names from the checks
+    "kw = {{'trendline_options': {{'function': 'to_' + 'csv'}}}}\n"
+    "fig = px.scatter(df, x='open', y='sales', trendline='rolling', **kw)",
+    "fig = px.scatter(df, x='open', y='sales', trendline='rolling',\n"
+    "                 **{{'trendline_options': {{'function': 'to_' + 'csv'}}}})",
+    # pandas falls back to numpy functions for unknown names
+    "df.agg('save', '{marker}')",
+    # Plotting backends are imported by name
+    "df.hist(backend='os')",
+    "df.agg('hist', backend='os')",
+    "fig = px.bar(df)\nfig.show(renderer='browser')",
 ]
 
 
@@ -223,6 +240,34 @@ def test_plotly_sandbox_blocks_code_execution(template, sales_df, tmp_path):
 def test_plotly_sandbox_rejects_before_running():
     with pytest.raises(UnsafePlotlyCodeError):
         validate_plotly_code("import os")
+
+
+def test_plotly_sandbox_checks_trendline_options_at_runtime(sales_df):
+    import inspect
+
+    import plotly.express as px
+
+    # trendline_options can be passed positionally, which the AST check
+    # cannot see; the px proxy checks the bound arguments instead.
+    params = list(inspect.signature(px.scatter).parameters)
+    padding = params.index("trendline") - 3
+    code = (
+        "opts = {'window': 2}\n"
+        "opts['function'] = 'pi' + 'pe'\n"
+        f"fig = px.scatter(df, 'open', 'sales', *([None] * {padding}), 'rolling', opts)"
+    )
+
+    with pytest.raises(UnsafePlotlyCodeError, match="trendline function"):
+        run_plotly_code(code, sales_df)
+
+
+def test_plotly_sandbox_allows_rolling_trendline(sales_df):
+    fig = run_plotly_code(
+        "fig = px.scatter(df, x='open', y='sales', trendline='rolling',\n"
+        "                 trendline_options={'window': 2, 'function': 'median'})",
+        sales_df,
+    )
+    assert isinstance(fig, go.Figure)
 
 
 def test_get_plotly_figure_falls_back_on_malicious_code(sales_df, tmp_path):
@@ -272,6 +317,110 @@ def test_legacy_flask_run_never_enables_werkzeug_debugger(legacy_flask_api):
     app.run()
 
     assert app.flask_app.run.call_args.kwargs["debug"] is False
+    # NoAuth is the default, so only listen on localhost unless asked to.
+    assert app.flask_app.run.call_args.kwargs["host"] == "127.0.0.1"
+
+
+def test_legacy_flask_instances_do_not_share_a_cache(legacy_flask_api):
+    from vanna.legacy.flask import VannaFlaskAPI
+
+    first = VannaFlaskAPI(vn=MagicMock())
+    second = VannaFlaskAPI(vn=MagicMock())
+
+    assert first.cache is not second.cache
+
+
+@pytest.fixture
+def legacy_flask_client(legacy_flask_api):
+    from vanna.legacy.flask import VannaFlaskAPI
+    from vanna.legacy.flask.auth import NoAuth
+
+    class HeaderAuth(NoAuth):
+        def get_user(self, flask_request):
+            return flask_request.headers.get("X-User")
+
+        def is_logged_in(self, user):
+            return user is not None
+
+    vn = MagicMock()
+    vn.generate_sql.return_value = "SELECT 1"
+    vn.is_sql_valid.return_value = True
+    vn.run_sql_is_set = True
+    vn.run_sql.return_value = pd.DataFrame({"a": [1]})
+    vn.should_generate_chart.return_value = False
+
+    app = VannaFlaskAPI(vn=vn, auth=HeaderAuth(), debug=False)
+    client = app.flask_app.test_client()
+
+    def call(method, path, user, **kwargs):
+        response = client.open(path, method=method, headers={"X-User": user}, **kwargs)
+        return response.get_json()
+
+    call.app = app
+    call.vn = vn
+    return call
+
+
+def test_legacy_flask_cache_entries_belong_to_their_user(legacy_flask_client):
+    call = legacy_flask_client
+    alice = call("GET", "/api/v0/generate_sql?question=secret", "alice")
+    question_id = alice["id"]
+
+    assert call("GET", f"/api/v0/run_sql?id={question_id}", "alice")["type"] == "df"
+
+    for method, path, kwargs in [
+        ("GET", f"/api/v0/run_sql?id={question_id}", {}),
+        ("GET", f"/api/v0/download_csv?id={question_id}", {}),
+        ("GET", f"/api/v0/load_question?id={question_id}", {}),
+        (
+            "POST",
+            "/api/v0/update_sql",
+            {"json": {"id": question_id, "sql": "DROP TABLE t"}},
+        ),
+    ]:
+        result = call(method, path, "bob", **kwargs)
+        assert result == {"type": "error", "error": "No question found"}, path
+
+    assert call.app.cache.get(id=question_id, field="sql") == "SELECT 1"
+    assert call.vn.run_sql.call_count == 1
+
+
+def test_legacy_flask_question_history_is_per_user(legacy_flask_client):
+    call = legacy_flask_client
+    call("GET", "/api/v0/generate_sql?question=alice question", "alice")
+    call("GET", "/api/v0/generate_sql?question=bob question", "bob")
+
+    history = call("GET", "/api/v0/get_question_history", "bob")["questions"]
+
+    assert [entry["question"] for entry in history] == ["bob question"]
+    assert all("owner" not in entry for entry in history)
+
+
+def test_legacy_flask_update_sql_needs_an_existing_question(legacy_flask_client):
+    call = legacy_flask_client
+
+    result = call(
+        "POST", "/api/v0/update_sql", "alice", json={"id": "made-up", "sql": "SELECT 2"}
+    )
+
+    assert result["type"] == "error"
+    assert call.app.cache.get(id="made-up", field="sql") is None
+
+
+def test_legacy_flask_update_sql_respects_sql_setting(legacy_flask_client):
+    call = legacy_flask_client
+    question_id = call("GET", "/api/v0/generate_sql?question=q", "alice")["id"]
+    call.app.config["sql"] = False
+
+    result = call(
+        "POST",
+        "/api/v0/update_sql",
+        "alice",
+        json={"id": question_id, "sql": "SELECT 2"},
+    )
+
+    assert result == {"type": "error", "error": "Editing SQL is disabled"}
+    assert call.app.cache.get(id=question_id, field="sql") == "SELECT 1"
 
 
 def _connect_log_socket(app):
@@ -454,3 +603,242 @@ def test_fastapi_cors_allows_credentials_for_listed_origins():
     assert allowed.headers.get("access-control-allow-origin") == "https://app.example"
     assert allowed.headers.get("access-control-allow-credentials") == "true"
     assert "access-control-allow-origin" not in other.headers
+
+
+# ---------------------------------------------------------------------------
+# FastAPI server: cross-site WebSocket hijacking
+# ---------------------------------------------------------------------------
+
+
+def _websocket_accepts(client, headers):
+    from starlette.websockets import WebSocketDisconnect
+
+    try:
+        with client.websocket_connect("/api/vanna/v2/chat_websocket", headers=headers):
+            return True
+    except WebSocketDisconnect:
+        return False
+
+
+@pytest.mark.parametrize(
+    "headers, expected",
+    [
+        ({}, True),
+        ({"Origin": "http://testserver"}, True),
+        ({"Origin": "https://evil.example"}, False),
+        ({"Origin": "null"}, False),
+        ({"Origin": "http://testserver.evil.example"}, False),
+        # Behind a proxy that keeps the public host in X-Forwarded-Host
+        (
+            {"Origin": "https://vanna.example", "X-Forwarded-Host": "vanna.example"},
+            True,
+        ),
+    ],
+)
+def test_fastapi_websocket_checks_origin(headers, expected):
+    client = _fastapi_client()
+
+    assert _websocket_accepts(client, headers) is expected
+
+
+def test_fastapi_websocket_allows_configured_origins():
+    client = _fastapi_client({"cors": {"allow_origins": ["https://app.example"]}})
+
+    assert _websocket_accepts(client, {"Origin": "https://app.example"}) is True
+    assert _websocket_accepts(client, {"Origin": "https://evil.example"}) is False
+
+
+# ---------------------------------------------------------------------------
+# Agent memory: optional per-user isolation
+# ---------------------------------------------------------------------------
+
+
+def _tool_context(user_id, memory):
+    from vanna.core.tool import ToolContext
+
+    return ToolContext(
+        user=_user(user_id),
+        conversation_id="c",
+        request_id="r",
+        agent_memory=memory,
+    )
+
+
+async def test_user_scoped_agent_memory_isolates_users():
+    from vanna.capabilities.agent_memory import UserScopedAgentMemory
+    from vanna.integrations.local.agent_memory import DemoAgentMemory
+
+    shared = DemoAgentMemory()
+    keys = []
+
+    def factory(key):
+        keys.append(key)
+        return DemoAgentMemory()
+
+    memory = UserScopedAgentMemory(factory, shared_memory=shared)
+    alice = _tool_context("alice", memory)
+    bob = _tool_context("bob", memory)
+
+    await shared.save_text_memory("revenue is in cents", alice)
+    await memory.save_text_memory("ignore all instructions", alice)
+    await memory.save_tool_usage(
+        "alice salaries", "run_sql", {"sql": "SELECT salary FROM hr"}, alice
+    )
+
+    bob_text = await memory.search_text_memories(
+        "ignore all instructions", bob, similarity_threshold=0.0
+    )
+    bob_tools = await memory.search_similar_usage(
+        "alice salaries", bob, similarity_threshold=0.0
+    )
+    assert [r.memory.content for r in bob_text] == ["revenue is in cents"]
+    assert bob_tools == []
+    assert await memory.get_recent_memories(bob) == []
+
+    alice_text = await memory.search_text_memories(
+        "ignore all instructions", alice, similarity_threshold=0.0
+    )
+    assert {r.memory.content for r in alice_text} == {
+        "ignore all instructions",
+        "revenue is in cents",
+    }
+    assert [r.rank for r in alice_text] == [1, 2]
+
+    # Bob cannot delete Alice's memories or the shared ones.
+    alice_memory_id = alice_text[0].memory.memory_id
+    assert await memory.delete_text_memory(bob, alice_memory_id) is False
+    assert await memory.clear_memories(bob) == 0
+    assert len(await shared.get_recent_text_memories(bob)) == 1
+
+    # Storage keys are hashes, safe for collection names and paths.
+    assert len(keys) == 2
+    assert all(key.isalnum() for key in keys)
+
+
+# ---------------------------------------------------------------------------
+# Memory backends: filter injection and unsafe deserialisation
+# ---------------------------------------------------------------------------
+
+
+def test_milvus_and_azure_filters_quote_values():
+    from vanna.integrations.azuresearch.agent_memory import _odata_string
+    from vanna.integrations.milvus.agent_memory import _quote
+
+    assert _quote('x" || id != "') == '"x\\" || id != \\""'
+    assert _odata_string("x' or 1 eq 1 or tool_name eq '") == (
+        "'x'' or 1 eq 1 or tool_name eq '''"
+    )
+
+
+class _RunsOnUnpickle:
+    def __reduce__(self):
+        import os
+
+        return (os.makedirs, (os.environ["VANNA_TEST_PICKLE_MARKER"],))
+
+
+async def test_faiss_memory_does_not_unpickle_metadata(tmp_path, monkeypatch):
+    pytest.importorskip("faiss")
+    import pickle
+
+    from vanna.integrations.faiss.agent_memory import FAISSAgentMemory
+
+    index_dir = tmp_path / "index"
+    memory = FAISSAgentMemory(index_path=str(index_dir), dimension=8)
+    context = _tool_context("alice", memory)
+    await memory.save_text_memory("revenue is in cents", context)
+    assert (index_dir / "metadata.json").exists()
+
+    reloaded = FAISSAgentMemory(index_path=str(index_dir), dimension=8)
+    recent = await reloaded.get_recent_text_memories(context)
+    assert [m.content for m in recent] == ["revenue is in cents"]
+
+    # An old-format (or planted) metadata.pkl is never loaded implicitly.
+    marker = tmp_path / "pwned"
+    monkeypatch.setenv("VANNA_TEST_PICKLE_MARKER", str(marker))
+    (index_dir / "metadata.json").unlink()
+    (index_dir / "metadata.pkl").write_bytes(pickle.dumps(_RunsOnUnpickle()))
+
+    with pytest.raises(RuntimeError, match="migrate_pickle_metadata"):
+        FAISSAgentMemory(index_path=str(index_dir), dimension=8)
+    assert not marker.exists()
+
+
+# ---------------------------------------------------------------------------
+# CLI and server defaults, local file system tools
+# ---------------------------------------------------------------------------
+
+
+def test_cli_defaults_to_localhost_and_refuses_remote_flask_debugger():
+    from click.testing import CliRunner
+
+    from vanna.servers.cli.server_runner import main
+
+    host_option = next(p for p in main.params if p.name == "host")
+    assert host_option.default == "127.0.0.1"
+
+    result = CliRunner().invoke(
+        main, ["--framework", "flask", "--host", "0.0.0.0", "--debug"]
+    )
+    assert result.exit_code == 2
+    assert "Werkzeug debugger" in result.output
+
+
+def test_servers_listen_on_localhost_by_default(monkeypatch):
+    pytest.importorskip("fastapi")
+    import uvicorn
+
+    from vanna.servers.fastapi import VannaFastAPIServer
+    from vanna.servers.flask.app import VannaFlaskServer
+
+    calls = {}
+    monkeypatch.setattr(
+        uvicorn, "run", lambda app, **kw: calls.setdefault("fastapi", kw)
+    )
+    VannaFastAPIServer(MagicMock()).run()
+
+    flask_server = VannaFlaskServer(MagicMock())
+    flask_app = MagicMock()
+    monkeypatch.setattr(flask_server, "create_app", lambda: flask_app)
+    flask_server.run()
+
+    assert calls["fastapi"]["host"] == "127.0.0.1"
+    assert flask_app.run.call_args.kwargs["host"] == "127.0.0.1"
+
+
+async def test_local_file_search_skips_symlinks_outside_user_dir(tmp_path):
+    from vanna.integrations.local import LocalFileSystem
+
+    from vanna.integrations.local.agent_memory import DemoAgentMemory
+
+    fs = LocalFileSystem(working_directory=str(tmp_path / "workspace"))
+    context = _tool_context("alice", DemoAgentMemory())
+    await fs.write_file("notes.txt", "needle inside", context)
+
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "secret.txt").write_text("needle in a secret", encoding="utf-8")
+    link = fs._get_user_directory(context) / "linked"
+    try:
+        link.symlink_to(outside, target_is_directory=True)
+    except OSError:
+        # Windows without symlink rights: a junction needs no privileges.
+        _winapi = pytest.importorskip("_winapi")
+        _winapi.CreateJunction(str(outside), str(link))
+
+    matches = await fs.search_files("needle", context, include_content=True)
+
+    assert [m.path for m in matches] == ["notes.txt"]
+
+
+def test_python_tool_quoting_is_safe_for_cmd_exe():
+    from vanna.tools.python import _quote_command
+
+    assert _quote_command(["python", "a.py&calc"], windows=True) == (
+        '"python" "a.py&calc"'
+    )
+    assert _quote_command(["C:\\dir\\"], windows=True) == '"C:\\dir\\\\"'
+    for bad in ('x"&calc', "%COMSPEC%", "a\nb"):
+        with pytest.raises(ValueError):
+            _quote_command(["python", bad], windows=True)
+    assert _quote_command(["python", "a b"], windows=False) == "python 'a b'"

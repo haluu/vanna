@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import shlex
 import sys
 from typing import Any, List, Optional, Sequence, Type
@@ -66,15 +67,15 @@ class RunPythonFileTool(Tool[RunPythonFileArgs]):
 
         command_parts = [sys.executable, args.filename]
         command_parts.extend(args.arguments)
-        command = _quote_command(command_parts)
 
         try:
+            command = _quote_command(command_parts)
             result = await self.file_system.run_bash(
                 command,
                 context,
                 timeout=args.timeout_seconds,
             )
-        except TimeoutError as exc:
+        except (TimeoutError, ValueError) as exc:
             message = str(exc)
             return _error_result(message)
 
@@ -127,15 +128,15 @@ class PipInstallTool(Tool[PipInstallArgs]):
             command_parts.append("--upgrade")
         command_parts.extend(args.packages)
         command_parts.extend(args.extra_args)
-        command = _quote_command(command_parts)
 
         try:
+            command = _quote_command(command_parts)
             result = await self.file_system.run_bash(
                 command,
                 context,
                 timeout=args.timeout_seconds,
             )
-        except TimeoutError as exc:
+        except (TimeoutError, ValueError) as exc:
             return _error_result(str(exc))
 
         success = result.returncode == 0
@@ -158,8 +159,25 @@ def create_python_tools(file_system: Optional[FileSystem] = None) -> List[Tool[A
     ]
 
 
-def _quote_command(parts: Sequence[str]) -> str:
-    return " ".join(shlex.quote(part) for part in parts)
+def _quote_command(parts: Sequence[str], windows: bool = os.name == "nt") -> str:
+    """Quote arguments for the shell that ``run_bash`` uses.
+
+    On Windows that shell is cmd.exe, which ignores POSIX single quotes, so
+    ``shlex.quote`` would let ``&``, ``|`` etc. in a filename run commands.
+    """
+    if not windows:
+        return " ".join(shlex.quote(part) for part in parts)
+
+    quoted = []
+    for part in parts:
+        # cmd.exe expands %VAR% even inside double quotes, and a double quote
+        # would end the quoted argument.
+        if any(ch in part for ch in '"%\r\n'):
+            raise ValueError(f"Unsupported character in command argument: {part!r}")
+        # Backslashes before the closing quote must be doubled (MSVCRT rules).
+        trailing = len(part) - len(part.rstrip("\\"))
+        quoted.append(f'"{part}' + "\\" * trailing + '"')
+    return " ".join(quoted)
 
 
 def _truncate(text: str, limit: int = MAX_OUTPUT_LENGTH) -> str:

@@ -74,7 +74,9 @@ class VannaFlaskServer:
         app = self.create_app()
 
         # Set defaults
-        run_kwargs = {"host": "0.0.0.0", "port": 5000, "debug": False, **kwargs}
+        # Listen on localhost unless told otherwise (pass host="0.0.0.0" to
+        # expose the server, e.g. in a container).
+        run_kwargs = {"host": "127.0.0.1", "port": 5000, "debug": False, **kwargs}
 
         # Get the port from run_kwargs
         port = run_kwargs.get("port", 5000)

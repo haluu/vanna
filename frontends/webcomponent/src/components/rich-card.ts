@@ -1,6 +1,7 @@
 import { LitElement, html, css } from 'lit';
 import { customElement, property } from 'lit/decorators.js';
 import { vannaDesignTokens } from '../styles/vanna-design-tokens.js';
+import { renderBasicMarkdown } from '../utils/html.js';
 
 export interface CardAction {
   label: string;
@@ -222,24 +223,9 @@ export class RichCard extends LitElement {
     }
   }
 
-  private _renderMarkdown(text: string): string {
-    // Simple markdown rendering - basic formatting
-    return text
-      .replace(/^### (.*$)/gm, '<h3>$1</h3>')
-      .replace(/^## (.*$)/gm, '<h2>$1</h2>')
-      .replace(/^# (.*$)/gm, '<h1>$1</h1>')
-      .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
-      .replace(/\*(.*?)\*/g, '<em>$1</em>')
-      .replace(/`([^`]+)`/g, '<code>$1</code>')
-      .replace(/^- (.*$)/gm, '<li>$1</li>')
-      .replace(/(<li>.*<\/li>)/s, '<ul>$1</ul>')
-      .replace(/\n\n/g, '</p><p>')
-      .replace(/^(?!<[h|u|l|p])(.+)$/gm, '<p>$1</p>');
-  }
-
   render() {
     const contentHtml = this.markdown
-      ? html`<div class="card-content ${this.collapsed ? 'collapsed' : ''}" .innerHTML=${this._renderMarkdown(this.content)}></div>`
+      ? html`<div class="card-content ${this.collapsed ? 'collapsed' : ''}" .innerHTML=${renderBasicMarkdown(this.content)}></div>`
       : html`<div class="card-content ${this.collapsed ? 'collapsed' : ''}">${this.content}</div>`;
 
     return html`

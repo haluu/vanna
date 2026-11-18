@@ -35,6 +35,15 @@ from vanna.capabilities.agent_memory import (
 from vanna.core.tool import ToolContext
 
 
+def _quote(value: Any) -> str:
+    """Quote a value as a string literal in a Milvus boolean expression.
+
+    Values such as memory IDs and tool names can come from users or the LLM,
+    so they must never be pasted into an expression unquoted.
+    """
+    return json.dumps(str(value), ensure_ascii=False)
+
+
 class MilvusAgentMemory(AgentMemory):
     """Milvus-based implementation of AgentMemory."""
 
@@ -177,7 +186,7 @@ class MilvusAgentMemory(AgentMemory):
             # Build filter expression
             expr = "success == true"
             if tool_name_filter:
-                expr += f' && tool_name == "{tool_name_filter}"'
+                expr += f" && tool_name == {_quote(tool_name_filter)}"
 
             search_params = {"metric_type": "IP", "params": {"nprobe": 10}}
 
@@ -288,7 +297,7 @@ class MilvusAgentMemory(AgentMemory):
             collection = self._get_collection()
 
             try:
-                expr = f'id == "{memory_id}"'
+                expr = f"id == {_quote(memory_id)}"
                 collection.delete(expr)
                 return True
             except Exception:
@@ -421,7 +430,7 @@ class MilvusAgentMemory(AgentMemory):
             collection = self._get_collection()
 
             try:
-                expr = f'id == "{memory_id}"'
+                expr = f"id == {_quote(memory_id)}"
                 collection.delete(expr)
                 return True
             except Exception:
@@ -443,9 +452,9 @@ class MilvusAgentMemory(AgentMemory):
             # Build filter expression
             expr_parts = []
             if tool_name:
-                expr_parts.append(f'tool_name == "{tool_name}"')
+                expr_parts.append(f"tool_name == {_quote(tool_name)}")
             if before_date:
-                expr_parts.append(f'timestamp < "{before_date}"')
+                expr_parts.append(f"timestamp < {_quote(before_date)}")
 
             if expr_parts:
                 expr = " && ".join(expr_parts)

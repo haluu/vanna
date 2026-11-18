@@ -37,6 +37,11 @@ from vanna.capabilities.agent_memory import (
 from vanna.core.tool import ToolContext
 
 
+def _odata_string(value: Any) -> str:
+    """Quote a value as an OData string literal for an Azure AI Search filter."""
+    return "'" + str(value).replace("'", "''") + "'"
+
+
 class AzureAISearchAgentMemory(AgentMemory):
     """Azure AI Search-based implementation of AgentMemory."""
 
@@ -189,7 +194,7 @@ class AzureAISearchAgentMemory(AgentMemory):
             # Build filter
             filter_expr = "success eq true"
             if tool_name_filter:
-                filter_expr += f" and tool_name eq '{tool_name_filter}'"
+                filter_expr += f" and tool_name eq {_odata_string(tool_name_filter)}"
 
             results = client.search(
                 search_text=None, vector=embedding, top_k=limit, filter=filter_expr
@@ -392,9 +397,9 @@ class AzureAISearchAgentMemory(AgentMemory):
             # Build filter
             filter_parts = []
             if tool_name:
-                filter_parts.append(f"tool_name eq '{tool_name}'")
+                filter_parts.append(f"tool_name eq {_odata_string(tool_name)}")
             if before_date:
-                filter_parts.append(f"timestamp lt '{before_date}'")
+                filter_parts.append(f"timestamp lt {_odata_string(before_date)}")
 
             filter_expr = " and ".join(filter_parts) if filter_parts else None
 
