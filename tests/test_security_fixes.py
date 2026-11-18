@@ -240,3 +240,72 @@ def test_get_plotly_figure_falls_back_on_malicious_code(sales_df, tmp_path):
     assert isinstance(fig, go.Figure)
     assert not marker.exists()
     vn.log.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# Legacy Flask app: Werkzeug debugger and unauthenticated log websocket
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def legacy_flask_api():
+    pytest.importorskip("flasgger")
+    pytest.importorskip("flask_sock")
+    from vanna.legacy.flask import VannaFlaskAPI
+    from vanna.legacy.flask.auth import NoAuth
+
+    class DenyAllAuth(NoAuth):
+        def is_logged_in(self, user):
+            return False
+
+    def make(auth=None):
+        return VannaFlaskAPI(vn=MagicMock(), auth=auth or NoAuth(), debug=True)
+
+    make.DenyAllAuth = DenyAllAuth
+    return make
+
+
+def test_legacy_flask_run_never_enables_werkzeug_debugger(legacy_flask_api):
+    app = legacy_flask_api()
+    app.flask_app.run = MagicMock()
+
+    app.run()
+
+    assert app.flask_app.run.call_args.kwargs["debug"] is False
+
+
+def _connect_log_socket(app):
+    import threading
+
+    from simple_websocket import Client
+    from werkzeug.serving import make_server
+
+    server = make_server("127.0.0.1", 0, app.flask_app, threaded=True)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        client = Client.connect(f"ws://127.0.0.1:{server.server_port}/api/v0/log")
+        try:
+            # Give the handler time to run its auth check.
+            client.receive(timeout=1)
+        except Exception:
+            pass
+        connected = client.connected
+        if connected:
+            client.close()
+        return connected
+    finally:
+        server.shutdown()
+
+
+def test_legacy_flask_log_socket_requires_auth(legacy_flask_api):
+    app = legacy_flask_api(auth=legacy_flask_api.DenyAllAuth())
+
+    assert _connect_log_socket(app) is False
+    assert app.ws_clients == []
+
+
+def test_legacy_flask_log_socket_allows_logged_in_users(legacy_flask_api):
+    app = legacy_flask_api()
+
+    assert _connect_log_socket(app) is True

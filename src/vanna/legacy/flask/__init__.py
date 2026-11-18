@@ -1163,6 +1163,12 @@ class VannaFlaskAPI:
 
             @self.sock.route("/api/v0/log")
             def sock_log(ws):
+                # The log stream contains every user's questions and SQL, so
+                # it needs the same authentication as the rest of the API.
+                user = self.auth.get_user(flask.request)
+                if not self.auth.is_logged_in(user):
+                    return
+
                 self.ws_clients.append(ws)
 
                 try:
@@ -1200,8 +1206,11 @@ class VannaFlaskAPI:
                 print("Your app is running at:")
                 print("http://localhost:8084")
 
+            # `debug` only controls Vanna's log console. Never enable Flask's
+            # debug mode here: it exposes the Werkzeug debugger (and its
+            # interactive console) on every network interface.
             self.flask_app.run(
-                host="0.0.0.0", port=8084, debug=self.debug, use_reloader=False
+                host="0.0.0.0", port=8084, debug=False, use_reloader=False
             )
 
 
